@@ -1,0 +1,575 @@
+{
+  "$defs": {
+    "BarcodeElement": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "barcode",
+          "default": "barcode",
+          "title": "Type",
+          "type": "string"
+        },
+        "value": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Value",
+          "type": "string"
+        },
+        "symbology": {
+          "default": "code128",
+          "enum": [
+            "code128",
+            "code39",
+            "ean13"
+          ],
+          "title": "Symbology",
+          "type": "string"
+        },
+        "module_width_mm": {
+          "default": 0.3,
+          "maximum": 1.0,
+          "minimum": 0.25,
+          "title": "Module Width Mm",
+          "type": "number"
+        },
+        "hri": {
+          "default": true,
+          "title": "Hri",
+          "type": "boolean"
+        },
+        "flex": {
+          "default": 0.0,
+          "minimum": 0,
+          "title": "Flex",
+          "type": "number"
+        }
+      },
+      "required": [
+        "value"
+      ],
+      "title": "BarcodeElement",
+      "type": "object"
+    },
+    "Box": {
+      "additionalProperties": false,
+      "description": "A layout container. Nestable; the leaves are Elements.",
+      "properties": {
+        "type": {
+          "const": "box",
+          "default": "box",
+          "title": "Type",
+          "type": "string"
+        },
+        "direction": {
+          "default": "row",
+          "enum": [
+            "row",
+            "col"
+          ],
+          "title": "Direction",
+          "type": "string"
+        },
+        "children": {
+          "items": {
+            "anyOf": [
+              {
+                "discriminator": {
+                  "mapping": {
+                    "barcode": "#/$defs/BarcodeElement",
+                    "qr": "#/$defs/QrElement",
+                    "raw_png": "#/$defs/RawPngElement",
+                    "text": "#/$defs/TextElement"
+                  },
+                  "propertyName": "type"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/QrElement"
+                  },
+                  {
+                    "$ref": "#/$defs/BarcodeElement"
+                  },
+                  {
+                    "$ref": "#/$defs/TextElement"
+                  },
+                  {
+                    "$ref": "#/$defs/RawPngElement"
+                  }
+                ]
+              },
+              {
+                "$ref": "#/$defs/Box"
+              }
+            ]
+          },
+          "minItems": 1,
+          "title": "Children",
+          "type": "array"
+        },
+        "gap_mm": {
+          "default": 0.6,
+          "maximum": 10,
+          "minimum": 0,
+          "title": "Gap Mm",
+          "type": "number"
+        },
+        "padding_mm": {
+          "default": 0.5,
+          "maximum": 10,
+          "minimum": 0,
+          "title": "Padding Mm",
+          "type": "number"
+        },
+        "align": {
+          "default": "center",
+          "enum": [
+            "start",
+            "center",
+            "end",
+            "stretch"
+          ],
+          "title": "Align",
+          "type": "string"
+        },
+        "flex": {
+          "default": 1.0,
+          "minimum": 0,
+          "title": "Flex",
+          "type": "number"
+        }
+      },
+      "required": [
+        "children"
+      ],
+      "title": "Box",
+      "type": "object"
+    },
+    "LabelSpec": {
+      "additionalProperties": false,
+      "description": "One physical label. Either names a preset or carries an explicit tree.",
+      "properties": {
+        "preset": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Preset"
+        },
+        "vars": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Vars",
+          "type": "object"
+        },
+        "elements": {
+          "anyOf": [
+            {
+              "items": {
+                "anyOf": [
+                  {
+                    "discriminator": {
+                      "mapping": {
+                        "barcode": "#/$defs/BarcodeElement",
+                        "qr": "#/$defs/QrElement",
+                        "raw_png": "#/$defs/RawPngElement",
+                        "text": "#/$defs/TextElement"
+                      },
+                      "propertyName": "type"
+                    },
+                    "oneOf": [
+                      {
+                        "$ref": "#/$defs/QrElement"
+                      },
+                      {
+                        "$ref": "#/$defs/BarcodeElement"
+                      },
+                      {
+                        "$ref": "#/$defs/TextElement"
+                      },
+                      {
+                        "$ref": "#/$defs/RawPngElement"
+                      }
+                    ]
+                  },
+                  {
+                    "$ref": "#/$defs/Box"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Elements"
+        },
+        "copies": {
+          "default": 1,
+          "maximum": 50,
+          "minimum": 1,
+          "title": "Copies",
+          "type": "integer"
+        },
+        "length_mm": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 200,
+              "type": "number"
+            },
+            {
+              "const": "auto",
+              "type": "string"
+            }
+          ],
+          "default": "auto",
+          "title": "Length Mm"
+        },
+        "dedupe_key": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Dedupe Key"
+        }
+      },
+      "title": "LabelSpec",
+      "type": "object"
+    },
+    "PrintOptions": {
+      "additionalProperties": false,
+      "properties": {
+        "batch_mode": {
+          "default": "strip",
+          "enum": [
+            "strip",
+            "discrete"
+          ],
+          "title": "Batch Mode",
+          "type": "string"
+        },
+        "flush": {
+          "default": false,
+          "title": "Flush",
+          "type": "boolean"
+        },
+        "on_error": {
+          "default": "continue",
+          "enum": [
+            "continue",
+            "abort"
+          ],
+          "title": "On Error",
+          "type": "string"
+        },
+        "deadline_s": {
+          "default": 900,
+          "maximum": 86400,
+          "minimum": 30,
+          "title": "Deadline S",
+          "type": "integer"
+        }
+      },
+      "title": "PrintOptions",
+      "type": "object"
+    },
+    "PrinterRef": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[a-z0-9][a-z0-9-]*$",
+          "title": "Id",
+          "type": "string"
+        },
+        "require_model": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Require Model"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "PrinterRef",
+      "type": "object"
+    },
+    "QrElement": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "qr",
+          "default": "qr",
+          "title": "Type",
+          "type": "string"
+        },
+        "value": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "title": "Value",
+          "type": "string"
+        },
+        "ec": {
+          "default": "M",
+          "enum": [
+            "L",
+            "M",
+            "Q",
+            "H"
+          ],
+          "title": "Ec",
+          "type": "string"
+        },
+        "quiet_zone": {
+          "default": 4,
+          "maximum": 8,
+          "minimum": 1,
+          "title": "Quiet Zone",
+          "type": "integer"
+        },
+        "flex": {
+          "default": 0.0,
+          "minimum": 0,
+          "title": "Flex",
+          "type": "number"
+        }
+      },
+      "required": [
+        "value"
+      ],
+      "title": "QrElement",
+      "type": "object"
+    },
+    "RawPngElement": {
+      "additionalProperties": false,
+      "description": "Escape hatch: a pre-rendered image, base64-encoded.\n\nThis is how a producer that already owns a renderer (InvenTree's own label\ntemplates, say) bypasses the preset system without the agent needing to know.",
+      "properties": {
+        "type": {
+          "const": "raw_png",
+          "default": "raw_png",
+          "title": "Type",
+          "type": "string"
+        },
+        "data_b64": {
+          "minLength": 1,
+          "title": "Data B64",
+          "type": "string"
+        },
+        "fit": {
+          "default": "contain",
+          "enum": [
+            "contain",
+            "cover",
+            "stretch"
+          ],
+          "title": "Fit",
+          "type": "string"
+        },
+        "dither": {
+          "default": false,
+          "title": "Dither",
+          "type": "boolean"
+        },
+        "flex": {
+          "default": 1.0,
+          "minimum": 0,
+          "title": "Flex",
+          "type": "number"
+        }
+      },
+      "required": [
+        "data_b64"
+      ],
+      "title": "RawPngElement",
+      "type": "object"
+    },
+    "TapeSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "width_mm": {
+          "default": 15.0,
+          "maximum": 15,
+          "minimum": 6,
+          "title": "Width Mm",
+          "type": "number"
+        },
+        "length_mm": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 200,
+              "type": "number"
+            },
+            {
+              "const": "auto",
+              "type": "string"
+            }
+          ],
+          "default": "auto",
+          "title": "Length Mm"
+        },
+        "kind": {
+          "default": "continuous",
+          "enum": [
+            "continuous",
+            "gap"
+          ],
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "title": "TapeSpec",
+      "type": "object"
+    },
+    "TextElement": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "text",
+          "default": "text",
+          "title": "Type",
+          "type": "string"
+        },
+        "value": {
+          "maxLength": 512,
+          "title": "Value",
+          "type": "string"
+        },
+        "max_lines": {
+          "default": 2,
+          "maximum": 6,
+          "minimum": 1,
+          "title": "Max Lines",
+          "type": "integer"
+        },
+        "bold": {
+          "default": false,
+          "title": "Bold",
+          "type": "boolean"
+        },
+        "condensed": {
+          "default": false,
+          "title": "Condensed",
+          "type": "boolean"
+        },
+        "align": {
+          "default": "left",
+          "enum": [
+            "left",
+            "center",
+            "right"
+          ],
+          "title": "Align",
+          "type": "string"
+        },
+        "min_pt": {
+          "default": 5.0,
+          "maximum": 48,
+          "minimum": 3,
+          "title": "Min Pt",
+          "type": "number"
+        },
+        "max_pt": {
+          "default": 28.0,
+          "maximum": 48,
+          "minimum": 3,
+          "title": "Max Pt",
+          "type": "number"
+        },
+        "flex": {
+          "default": 1.0,
+          "minimum": 0,
+          "title": "Flex",
+          "type": "number"
+        }
+      },
+      "required": [
+        "value"
+      ],
+      "title": "TextElement",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "v": {
+      "const": 1,
+      "default": 1,
+      "title": "V",
+      "type": "integer"
+    },
+    "job_id": {
+      "maxLength": 64,
+      "minLength": 1,
+      "title": "Job Id",
+      "type": "string"
+    },
+    "idempotency_key": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Idempotency Key",
+      "type": "string"
+    },
+    "printer": {
+      "$ref": "#/$defs/PrinterRef"
+    },
+    "tape": {
+      "$ref": "#/$defs/TapeSpec",
+      "default": {
+        "width_mm": 15.0,
+        "length_mm": "auto",
+        "kind": "continuous"
+      }
+    },
+    "options": {
+      "$ref": "#/$defs/PrintOptions",
+      "default": {
+        "batch_mode": "strip",
+        "flush": false,
+        "on_error": "continue",
+        "deadline_s": 900
+      }
+    },
+    "labels": {
+      "items": {
+        "$ref": "#/$defs/LabelSpec"
+      },
+      "maxItems": 200,
+      "minItems": 1,
+      "title": "Labels",
+      "type": "array"
+    }
+  },
+  "required": [
+    "job_id",
+    "idempotency_key",
+    "printer",
+    "labels"
+  ],
+  "title": "PrintJob",
+  "type": "object"
+}
