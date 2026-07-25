@@ -95,6 +95,90 @@ def cmd_schema(args) -> int:
     return 0
 
 
+def cmd_decode(args) -> int:
+    """Turn captured printer bytes back into an image.
+
+    This is what proves the wire format: a preview shows what was intended, this
+    shows what the printer would actually receive.
+    """
+    from labelfab.device import decode_frames
+
+    stream = Path(args.capture).read_bytes()
+    frames = decode_frames(stream, rotation=args.rotation, mirror=args.mirror)
+    if not frames:
+        print("labelfab: no GS v 0 frame found in this capture", file=sys.stderr)
+        return 1
+
+    for i, frame in enumerate(frames):
+        out = args.output if len(frames) == 1 else f"{Path(args.output).stem}-{i}.png"
+        frame.image.save(out)
+        print(
+            f"{out}: frame at byte {frame.offset}, {frame.width_px}x{frame.height_px}px "
+            f"({frame.width_bytes} bytes/line, {frame.height_px / 7.992:.1f}mm of tape)",
+            file=sys.stderr,
+        )
+    if len(frames) > 1:
+        print(
+            f"note: {len(frames)} frames -- this batch printed discretely and paid a "
+            f"leader/trailer feed per label",
+            file=sys.stderr,
+        )
+    return 0
+
+
+def _open_transport(args):
+    from labelfab.device import AFBluetoothTransport, FakeTransport, SerialTransport
+
+    if args.transport == "fake":
+        return FakeTransport()
+    if args.transport == "serial":
+        return SerialTransport(port=args.port)
+    if not args.mac:
+        raise SystemExit("labelfab: --mac is required for the afbluetooth transport")
+    return AFBluetoothTransport(mac=args.mac, channel=args.channel)
+
+
+def cmd_probe(args) -> int:
+    """Hardware bring-up. Every sub-mode answers one config constant."""
+    from labelfab.device import D30Config, PhomemoD30
+
+    printer = PhomemoD30(_open_transport(args), config=D30Config(pace_factor=args.pace_factor))
+    capture = None
+
+    with printer:
+        if args.self_test:
+            raster = printer.self_test(args.width_px, args.length_px)
+            printer.print_raster(raster)
+            print(
+                f"printed a {args.width_px}x{args.length_px} alignment pattern. Check: "
+                f"is the border complete on all four sides (head width), is the solid "
+                f"block top-left (rotation/mirror), are the tick rules evenly spaced?",
+                file=sys.stderr,
+            )
+        elif args.width_sweep:
+            for width in [int(w) for w in args.width_sweep.split(",")]:
+                if width % 8:
+                    print(f"skipping {width}px: not byte-aligned", file=sys.stderr)
+                    continue
+                printer.print_raster(printer.self_test(width, 120))
+                print(f"printed at {width}px ({width / 7.992:.1f}mm)", file=sys.stderr)
+        elif args.length_sweep:
+            for lines in [int(n) for n in args.length_sweep.split(",")]:
+                printer.print_raster(printer.self_test(args.width_px, lines))
+                print(f"printed {lines} lines ({lines / 7.992:.0f}mm)", file=sys.stderr)
+        else:
+            print("nothing to do; pass --self-test, --width-sweep or --length-sweep", file=sys.stderr)
+            return 2
+
+        if args.transport == "fake":
+            capture = bytes(printer.transport.buf)
+
+    if capture is not None and args.capture_to:
+        Path(args.capture_to).write_bytes(capture)
+        print(f"captured {len(capture)}B to {args.capture_to}", file=sys.stderr)
+    return 0
+
+
 def _add_render_flags(p: argparse.ArgumentParser) -> None:
     p.add_argument("job", help="path to a job JSON file, or - for stdin")
     p.add_argument("--qr-base-url", default="", help="prefix codes with a short-link base")
@@ -130,6 +214,36 @@ def build_parser() -> argparse.ArgumentParser:
 
     schema = sub.add_parser("schema", help="print the job JSON Schema")
     schema.set_defaults(func=cmd_schema)
+
+    dec = sub.add_parser(
+        "decode",
+        help="rebuild an image from captured printer bytes",
+        description="Proves the wire format: what the printer receives, not what "
+        "was intended. Catches inverted bits, row padding and wrong rotation.",
+    )
+    dec.add_argument("capture", help="file of raw bytes sent to the printer")
+    dec.add_argument("-o", "--output", default="decoded.png")
+    dec.add_argument("--rotation", type=int, default=270, choices=[0, 90, 180, 270])
+    dec.add_argument("--mirror", action="store_true")
+    dec.set_defaults(func=cmd_decode)
+
+    probe = sub.add_parser("probe", help="hardware bring-up patterns")
+    probe.add_argument("--transport", default="afbluetooth", choices=["afbluetooth", "serial", "fake"])
+    probe.add_argument("--mac", help="printer Bluetooth address")
+    probe.add_argument("--channel", type=int, default=1, help="RFCOMM channel")
+    probe.add_argument("--port", default="/dev/rfcomm0", help="for --transport serial")
+    probe.add_argument("--width-px", type=int, default=120, help="96 for 12mm, 120 for 15mm")
+    probe.add_argument("--length-px", type=int, default=320)
+    probe.add_argument("--pace-factor", type=float, default=1.2)
+    probe.add_argument("--capture-to", help="write the byte stream here (fake transport)")
+    probe.add_argument(
+        "--self-test",
+        action="store_true",
+        help="border + rules: answers head width, offset, rotation and mirror at once",
+    )
+    probe.add_argument("--width-sweep", help="comma-separated pixel widths, e.g. 96,104,112,120")
+    probe.add_argument("--length-sweep", help="comma-separated line counts, e.g. 320,1600,6400")
+    probe.set_defaults(func=cmd_probe)
 
     return parser
 
