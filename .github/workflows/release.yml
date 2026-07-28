@@ -1,0 +1,67 @@
+name: release
+
+# Tag push -> build a .deb per arch -> attach to the GitHub release. apt-tap then
+# tracks the release and 302-redirects apt clients straight to these public assets,
+# so nothing here uploads package bytes anywhere else.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up QEMU (for the arm64 leg)
+        if: matrix.arch == 'arm64'
+        uses: docker/setup-qemu-action@v3
+      - name: Build the .deb
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          mkdir -p dist
+          docker run --rm --platform "linux/${{ matrix.arch }}" \
+            -v "$PWD:/src" -v "$PWD/dist:/out" \
+            -e VERSION="$VERSION" -e ARCH="${{ matrix.arch }}" \
+            debian:bookworm /src/deploy/build-deb.sh
+      - name: Smoke test the package (amd64 only; arm64 under qemu is slow)
+        if: matrix.arch == 'amd64'
+        run: |
+          docker run --rm -v "$PWD/dist:/dist" debian:bookworm bash -c '
+            set -e
+            apt-get update -qq
+            apt-get install -y /dist/*_amd64.deb >/dev/null
+            /usr/bin/labelfab --version >/dev/null 2>&1 || labelfab schema >/dev/null
+            test -f /lib/systemd/system/labelfab-agent.service
+            test -f /etc/labelfab/agent.toml
+            labelfab render <(echo "{\"v\":1,\"job_id\":\"t\",\"idempotency_key\":\"t\",\"printer\":{\"id\":\"d30-workshop\"},\"labels\":[{\"elements\":[{\"type\":\"text\",\"value\":\"ok\"}]}]}") -o /tmp/x.png
+            echo "smoke ok"
+          '
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deb-${{ matrix.arch }}
+          path: dist/*.deb
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: deb-*
+          merge-multiple: true
+          path: dist
+      - name: Attach debs to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/*.deb \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+          || gh release upload "$GITHUB_REF_NAME" dist/*.deb --repo "$GITHUB_REPOSITORY" --clobber

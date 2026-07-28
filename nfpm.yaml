@@ -1,0 +1,49 @@
+# Packaged with nfpm (https://nfpm.goreleaser.com). VERSION and ARCH come from the
+# environment so one file serves both the amd64 and arm64 matrix legs.
+#
+# What ships is a --copies venv built at the final install path (/opt/labelfab/venv)
+# inside a debian container, so shebangs and the interpreter resolve where they land.
+# A venv is not a self-contained interpreter, though: it still resolves the base
+# python's stdlib, so the package depends on the distro's python3. Build on the image
+# whose python matches the target box.
+name: labelfab-agent
+arch: ${ARCH}
+platform: linux
+version: ${VERSION}
+maintainer: sengine <alex@sengine.cloud>
+description: |
+  Queue-driven label printing agent for the Phomemo D30.
+  Listens on MQTT (or a spool directory), renders QR/barcode/text labels and prints
+  a batch as a single continuous strip. No vendor app, no GUI.
+vendor: sengine
+homepage: https://github.com/sengine-cloud/labelfab
+license: MIT
+section: utils
+priority: optional
+
+depends:
+  - python3
+  - libc6
+  - bluez
+  - dbus
+recommends:
+  - libzbar0 # only needed for `labelfab probe --verify-scan`
+
+contents:
+  - src: /opt/labelfab
+    dst: /opt/labelfab
+  - src: deploy/labelfab-agent.service
+    dst: /lib/systemd/system/labelfab-agent.service
+  - src: deploy/agent.toml.example
+    dst: /etc/labelfab/agent.toml
+    type: config|noreplace # an upgrade must never clobber a configured host
+  - src: /opt/labelfab/venv/bin/labelfab
+    dst: /usr/bin/labelfab
+    type: symlink
+  - src: /opt/labelfab/venv/bin/labelfab-agent
+    dst: /usr/bin/labelfab-agent
+    type: symlink
+
+scripts:
+  postinstall: deploy/postinst.sh
+  preremove: deploy/prerm.sh
