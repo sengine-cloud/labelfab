@@ -1,0 +1,35 @@
+name: ci
+
+# GitHub-hosted, not the org's shared ARC runners: public repos cannot use them.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e '.[dev]'
+      - name: ruff
+        run: ruff check src tests
+      - name: pytest
+        run: pytest -q
+      - name: contract schema is in sync
+        # The committed JSON Schema is the cross-repo contract; a drift here means a
+        # producer would validate against a stale shape. Regenerate deliberately.
+        run: |
+          python -c "from labelfab.contract import job_schema; import json; \
+            print(json.dumps(job_schema(), indent=2))" > /tmp/schema.json
+          diff <(python -m json.tool contracts/job-v1.schema.json) \
+               <(python -m json.tool /tmp/schema.json) \
+            || { echo '::error::contracts/job-v1.schema.json is stale; regenerate it'; exit 1; }
