@@ -138,15 +138,61 @@ def _open_transport(args):
     return AFBluetoothTransport(mac=args.mac, channel=args.channel)
 
 
+def _stack(raster, copies: int):
+    """Repeat one raster ``copies`` times into a single frame -- a strip of clones.
+
+    Same width means the packed rows just concatenate, so this is exactly what a real
+    N-label strip looks like on the wire: one header, N labels' worth of body.
+    """
+    from labelfab.render.raster import DeviceRaster
+
+    return DeviceRaster(
+        width_px=raster.width_px,
+        height_px=raster.height_px * copies,
+        data=raster.data * copies,
+    )
+
+
 def cmd_probe(args) -> int:
     """Hardware bring-up. Every sub-mode answers one config constant."""
     from labelfab.device import D30Config, PhomemoD30
+
+    # Pace sweep needs a fresh pace_factor per pass, so it manages its own printers
+    # and returns before the shared one below.
+    if args.pace_sweep:
+        for pf in [float(x) for x in args.pace_sweep.split(",")]:
+            printer = PhomemoD30(_open_transport(args), config=D30Config(pace_factor=pf))
+            with printer:
+                printer.print_raster(printer.self_test(args.width_px, 3200))
+            print(
+                f"printed a 3200-line strip at pace_factor={pf} -- the lowest value that "
+                f"prints clean, plus 50%, is the setting",
+                file=sys.stderr,
+            )
+        return 0
 
     printer = PhomemoD30(_open_transport(args), config=D30Config(pace_factor=args.pace_factor))
     capture = None
 
     with printer:
-        if args.self_test:
+        if args.strip:
+            unit = printer.self_test(args.width_px, args.length_px)
+            printer.print_raster(_stack(unit, args.strip))
+            print(
+                f"printed {args.strip} labels as ONE strip "
+                f"({args.strip * args.length_px} lines).",
+                file=sys.stderr,
+            )
+            if args.measure_waste:
+                for _ in range(args.strip):
+                    printer.print_raster(unit)
+                print(
+                    f"then printed the same {args.strip} discretely. Measure the tape each "
+                    f"run used: the difference is the per-label leader/trailer, i.e. "
+                    f"separator_mm and the whole case for strip mode.",
+                    file=sys.stderr,
+                )
+        elif args.self_test:
             raster = printer.self_test(args.width_px, args.length_px)
             printer.print_raster(raster)
             print(
@@ -243,6 +289,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     probe.add_argument("--width-sweep", help="comma-separated pixel widths, e.g. 96,104,112,120")
     probe.add_argument("--length-sweep", help="comma-separated line counts, e.g. 320,1600,6400")
+    probe.add_argument(
+        "--pace-sweep",
+        help="comma-separated pace_factors, e.g. 1.2,1.0,0.8,0.6; finds where a long strip garbles",
+    )
+    probe.add_argument(
+        "--strip",
+        type=int,
+        help="print N alignment labels as one strip; with --measure-waste, also N discretely",
+    )
+    probe.add_argument("--measure-waste", action="store_true", help="pairs with --strip")
     probe.set_defaults(func=cmd_probe)
 
     return parser
