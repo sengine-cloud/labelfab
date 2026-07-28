@@ -1,0 +1,102 @@
+"""Worker: the strip/discrete asymmetry, offline grace and crash recovery."""
+
+from __future__ import annotations
+
+from conftest import make_job
+
+
+def test_strip_is_one_frame(harness):
+    h = harness()
+    h.submit(make_job("j", n_labels=3, flush=True))
+    assert h.frames == 1  # three labels, one GS v 0 -- the whole economy of strip mode
+    result = h.publisher.results[-1]
+    assert result.state == "completed"
+    assert h.spool.printed_labels("j") == {0, 1, 2}
+
+
+def test_size_trigger_flushes_without_explicit_flush(harness):
+    h = harness(max_labels=2, max_length_mm=10_000)
+    h.submit(make_job("j", n_labels=2))  # no flush; count trigger fires
+    assert h.frames == 1
+    assert h.publisher.results[-1].state == "completed"
+
+
+def test_nothing_prints_until_idle_then_flushes(harness, clock):
+    h = harness(max_labels=100, max_wait_s=30, max_length_mm=10_000)
+    h.submit(make_job("j", n_labels=1))
+    assert h.frames == 0  # still pending
+    assert not h.publisher.results
+    clock.advance(30)
+    h.worker.tick()
+    assert h.frames == 1
+    assert h.publisher.results[-1].state == "completed"
+
+
+def test_geometry_change_flushes_the_pending_strip(harness):
+    h = harness(max_labels=100, max_length_mm=10_000)
+    h.submit(make_job("a", n_labels=1, tape_width_mm=12.0))
+    assert h.frames == 0
+    h.submit(make_job("b", n_labels=1, tape_width_mm=15.0))  # different width
+    assert h.frames == 1  # 'a' was flushed before 'b' could join
+    assert h.spool.result_for("a").state == "completed"
+
+
+def test_strip_partial_failure_is_terminal_and_flagged(harness):
+    h = harness()
+    h.fail_after_bytes = 45  # connect + header ok, body write dies
+    h.submit(make_job("j", n_labels=3, flush=True))
+    assert h.frames == 1  # one attempt, no auto-retry -- tape may have moved
+    result = h.publisher.results[-1]
+    assert result.state == "failed"
+    assert result.partial_tape_consumed is True
+
+
+def test_discrete_prints_a_frame_per_label(harness):
+    h = harness()
+    h.submit(make_job("j", n_labels=3, batch_mode="discrete"))
+    assert h.frames == 3
+    assert h.publisher.results[-1].state == "completed"
+
+
+def test_recovery_skips_already_printed_labels(harness):
+    h = harness()
+    h.spool.try_insert(make_job("j", n_labels=3, batch_mode="discrete"))
+    h.spool.label_printed("j", 0)
+    h.spool.label_printed("j", 1)  # a crash left these done
+    h.worker.submit("j")
+    assert h.frames == 1  # only label 2 reprints
+    assert h.publisher.results[-1].state == "completed"
+
+
+def test_offline_returns_job_to_queue_not_failed(harness, clock):
+    h = harness()
+    h.offline = True
+    h.submit(make_job("j", n_labels=1, flush=True))
+    assert not h.publisher.results  # never failed
+    assert h.spool.queued() == ["j"]  # still there to retry
+    assert h.publisher.statuses[-1].state == "disconnected"
+
+    h.offline = False
+    clock.advance(20)  # past retry_interval_s
+    h.worker.retry_queued()
+    assert h.publisher.results[-1].state == "completed"
+
+
+def test_wrong_model_is_rejected(harness):
+    h = harness()
+    h.submit(make_job("j", require_model="phomemo-m110", flush=True))
+    assert h.frames == 0
+    assert h.publisher.results[-1].state == "rejected"
+
+
+def test_dedupe_key_skips_a_second_job(harness):
+    h = harness()
+    h.submit(make_job("a", n_labels=1, flush=True, dedupe_key="bin-a4"))
+    assert h.publisher.results[-1].state == "completed"
+    frames_after_a = h.frames
+
+    h.submit(make_job("b", idempotency_key="b", n_labels=1, flush=True, dedupe_key="bin-a4"))
+    assert h.frames == frames_after_a  # nothing new printed
+    result = h.publisher.results[-1]
+    assert result.state == "completed"
+    assert result.labels[0].state == "skipped_duplicate"
