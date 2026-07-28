@@ -1,0 +1,44 @@
+[Unit]
+Description=labelfab Phomemo D30 print agent
+Documentation=https://github.com/sengine-cloud/labelfab
+# Bluetooth must be up before we try to open an RFCOMM socket.
+After=bluetooth.service network-online.target
+Wants=bluetooth.service network-online.target
+
+[Service]
+Type=simple
+User=labelfab
+Group=labelfab
+# The socket needs the bluetooth group; pairing state lives in /var/lib/bluetooth.
+SupplementaryGroups=bluetooth
+ExecStart=/usr/bin/labelfab-agent
+Restart=always
+RestartSec=5
+
+# Spool DB and any local job directory.
+StateDirectory=labelfab
+Environment=LABELFAB_SPOOL__PATH=/var/lib/labelfab/spool.db
+
+# The MQTT password is TPM-sealed with `systemd-creds encrypt` and surfaced into
+# tmpfs here; the agent reads it from $CREDENTIALS_DIRECTORY when the config leaves
+# mqtt.password empty. A binding to the host TPM, not a key written to disk.
+# Provision with:
+#   systemd-creds encrypt --name=mqtt_password - /etc/labelfab/mqtt_password.cred
+# then uncomment:
+#LoadCredentialEncrypted=mqtt_password:/etc/labelfab/mqtt_password.cred
+
+# Hardening. AF_BLUETOOTH is the one every cheat-sheet omits: without it the RFCOMM
+# socket() fails with EAFNOSUPPORT and nothing hints that systemd is the cause.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_BLUETOOTH
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/labelfab
+PrivateTmp=true
+ProtectControlGroups=true
+ProtectKernelTunables=true
+RestrictNamespaces=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

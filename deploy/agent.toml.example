@@ -1,0 +1,57 @@
+# labelfab-agent configuration.
+#
+# Installed as /etc/labelfab/agent.toml (config|noreplace: upgrades never touch it).
+# Every key is overridable by an environment variable: LABELFAB_<SECTION>__<KEY>,
+# e.g. the MQTT password is LABELFAB_MQTT__PASSWORD -- keep secrets out of this file
+# and pass them through systemd credentials instead.
+#
+# The four device/tape constants below are hardware truth: they get their real values
+# from `labelfab probe` on day one, not from a guess. The defaults are the safe
+# starting points.
+
+[agent]
+printer_id = "d30-workshop"
+topic_prefix = "se/v1/print"
+# A local drop directory for the offline `cp job.json` path (optional):
+# spool_dir = "/var/spool/labelfab"
+log_level = "INFO"
+
+[mqtt]
+# Empty host disables MQTT (dir-only operation). For the in-cluster broker over the
+# Cloudflare tunnel, use websockets on 443; on the LAN with a direct broker, tcp/1883.
+host = "mqtt.sengine.cloud"
+port = 443
+transport = "websockets"
+ws_path = "/mqtt"
+tls = true
+username = "d30-workshop"
+# password comes from LABELFAB_MQTT__PASSWORD / the systemd credential, never here.
+
+[device]
+transport = "afbluetooth"   # afbluetooth | serial | fake
+mac = ""                     # set after `bluetoothctl pair/trust`
+channel = 1
+raster_width_px = 96         # 96 = 12mm head (verified); 120 = 15mm (day-1 hypothesis)
+pace_factor = 1.2            # lower until a long strip garbles, then +50%
+wake_dummy_feed = false
+
+[tape]
+width_mm = 15.0
+kind = "continuous"          # continuous | gap (gap forces discrete mode)
+offset_px = 0                # letterbox a 96px head onto wider tape
+rotation = 270
+mirror = false
+
+[strip]
+max_wait_s = 30.0
+max_length_mm = 300.0
+max_labels = 24
+separator_mm = 2.0
+
+[render]
+# A short redirector buys back QR module size; encode a token, not a full URL.
+qr_base_url = ""
+threshold = 128
+
+[spool]
+path = "/var/lib/labelfab/spool.db"

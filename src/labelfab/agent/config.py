@@ -156,12 +156,38 @@ class Config(BaseSettings):
         return f"{self.agent.topic_prefix}/{self.agent.printer_id}/{leaf}"
 
 
+def _credential(name: str) -> str | None:
+    """Read a systemd-provided credential, if the unit passed one.
+
+    ``LoadCredentialEncrypted=`` drops the decrypted secret into a tmpfs directory
+    named by ``$CREDENTIALS_DIRECTORY``. Reading it here is what lets the MQTT
+    password be a TPM-sealed credential rather than a value written into the config.
+    """
+    import os
+
+    base = os.environ.get("CREDENTIALS_DIRECTORY")
+    if not base:
+        return None
+    path = Path(base) / name
+    if path.is_file():
+        return path.read_text().strip()
+    return None
+
+
 def load(path: Path | str | None = None) -> Config:
     """Load config, optionally from a specific TOML file."""
     if path is not None:
         Config._toml_path_override = Path(path)  # type: ignore[attr-defined]
     try:
-        return Config()
+        config = Config()
     finally:
         if path is not None:
             del Config._toml_path_override  # type: ignore[attr-defined]
+
+    # A systemd credential wins over an (absent) config password: it is the sealed,
+    # not-on-disk path the packaged unit is built around.
+    if not config.mqtt.password:
+        cred = _credential("mqtt_password")
+        if cred:
+            config.mqtt.password = cred
+    return config
