@@ -154,8 +154,7 @@ class Spool:
 
     def is_recent_dedupe(self, key: str) -> bool:
         return (
-            self._db.execute("SELECT 1 FROM dedupe WHERE dedupe_key = ?", (key,)).fetchone()
-            is not None
+            self._db.execute("SELECT 1 FROM dedupe WHERE dedupe_key = ?", (key,)).fetchone() is not None
         )
 
     def record_dedupe(self, key: str, job_id: str) -> None:
@@ -168,9 +167,7 @@ class Spool:
 
     def purge_dedupe(self, ttl_s: float) -> int:
         """Opportunistic sweep -- called on insert, so no timer thread is needed."""
-        cur = self._db.execute(
-            "DELETE FROM dedupe WHERE printed_at < ?", (self._clock() - ttl_s,)
-        )
+        cur = self._db.execute("DELETE FROM dedupe WHERE printed_at < ?", (self._clock() - ttl_s,))
         return cur.rowcount
 
     # -- per-label print progress ------------------------------------------ #
@@ -180,8 +177,7 @@ class Spool:
 
     def label_printed(self, job_id: str, index: int) -> None:
         self._db.execute(
-            "INSERT OR IGNORE INTO printed_labels (job_id, label_index, printed_at) "
-            "VALUES (?, ?, ?)",
+            "INSERT OR IGNORE INTO printed_labels (job_id, label_index, printed_at) VALUES (?, ?, ?)",
             (job_id, index, self._clock()),
         )
 

@@ -181,8 +181,7 @@ def cmd_probe(args) -> int:
             unit = printer.self_test(args.width_px, args.length_px)
             printer.print_raster(_stack(unit, args.strip))
             print(
-                f"printed {args.strip} labels as ONE strip "
-                f"({args.strip * args.length_px} lines).",
+                f"printed {args.strip} labels as ONE strip ({args.strip * args.length_px} lines).",
                 file=sys.stderr,
             )
             if args.measure_waste:

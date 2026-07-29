@@ -1,61 +1,127 @@
-"""Decode the D30's BLE notify (ff03) frames into structured feedback.
+"""Accumulated printer feedback for one connection.
 
-Discovered on hardware: the BLE link -- unlike SPP -- has a real read channel. During
-a print the printer streams two kinds of notification on ``ff03``:
+Both transports deliver the same ``1A <tag> <payload>`` status frames; only the
+delivery differs. On BLE they arrive as discrete ``ff03`` notifications interleaved
+with per-write ``0101`` ACKs; on SPP they arrive as an unframed byte stream. This
+class sits above that split -- it takes whatever the transport hands it, runs it
+through :class:`~labelfab.device.responses.StatusParser`, and exposes decoded state.
 
-* a per-packet **ACK** (``0101``) -- one for roughly every write, so it can gate the
-  next write and pace a print to the printer's actual consumption rate; and
-* one-field **status frames** prefixed ``0x1a``: ``1a <field-id> <value...>``, e.g.
-  field ``0x08`` carries the serial number as ASCII (``Q223P4C31420105``). The other
-  fields are telemetry whose meaning is not yet decoded, so they are kept raw.
+``0101`` is transport-level flow control and ``1a…`` is protocol-level status. Keeping
+that line clear is what lets the driver above treat SPP and BLE identically: the BLE
+transport consumes ACKs to pace itself, and everything else looks the same.
 
-This turns the SPP-era "we hope it printed" into "the printer acknowledged N packets
-and reported these fields", which the agent surfaces as real status.
+Historically this decoded exactly one field (the serial) and kept the rest as raw hex.
+The vendor parser turned out to handle 29 tags; 11 are confirmed on hardware and all
+of them are now named in ``responses.TAGS``.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-#: Per-packet acknowledgement the printer emits while consuming a frame.
-ACK = b"\x01\x01"
-#: One-field status frames start with this byte.
-STATUS_PREFIX = 0x1A
-#: Status field id whose value is the ASCII serial number.
+from labelfab.device.responses import (
+    ACK,
+    STATUS_PREFIX,
+    DeviceState,
+    PaperState,
+    StatusFrame,
+    StatusParser,
+)
+
+#: Status field id whose value is the ASCII serial number. Kept for callers that
+#: predate the named-tag table.
 FIELD_SERIAL = 0x08
+
+__all__ = ["ACK", "FIELD_SERIAL", "STATUS_PREFIX", "DeviceFeedback", "PaperState", "StatusFrame"]
 
 
 @dataclass
 class DeviceFeedback:
-    """Accumulated notifications for one print/connection."""
+    """Notifications accumulated over one print/connection.
 
-    acks: int = 0
-    serial: str | None = None
-    #: Decoded status fields: field-id -> raw value bytes (serial also parsed out).
-    fields: dict[int, bytes] = field(default_factory=dict)
+    Feed it either whole notifications (BLE) or arbitrary stream slices (SPP);
+    :class:`StatusParser` holds partial frames until they complete, so callers never
+    have to reassemble.
+    """
 
-    def ingest(self, frame: bytes) -> None:
-        frame = bytes(frame)
-        if frame == ACK:
-            self.acks += 1
-        elif len(frame) >= 2 and frame[0] == STATUS_PREFIX:
-            field_id, value = frame[1], frame[2:]
-            self.fields[field_id] = value
-            if field_id == FIELD_SERIAL:
-                try:
-                    self.serial = value.decode("ascii").rstrip("\x00") or None
-                except UnicodeDecodeError:
-                    pass
+    state: DeviceState = field(default_factory=DeviceState)
+    parser: StatusParser = field(default_factory=StatusParser)
+
+    # -- ingestion ---------------------------------------------------------- #
+
+    def ingest(self, data: bytes) -> list[StatusFrame]:
+        """Absorb bytes from the transport, returning any newly completed frames.
+
+        A bare ``0101`` is counted as an ACK and not parsed further. Anything else
+        goes to the length-aware parser.
+        """
+        data = bytes(data)
+        if data == ACK:
+            self.state.acks += 1
+            return []
+        frames = self.parser.feed(data)
+        for f in frames:
+            self.state.ingest(f)
+        return frames
+
+    # -- decoded view ------------------------------------------------------- #
+
+    @property
+    def acks(self) -> int:
+        return self.state.acks
+
+    @property
+    def serial(self) -> str | None:
+        return self.state.serial
+
+    @property
+    def model_prefix(self) -> str | None:
+        """First four serial characters -- how the vendor resolves the model."""
+        return self.state.model_prefix
+
+    @property
+    def firmware(self) -> str | None:
+        return self.state.firmware
+
+    @property
+    def battery_pct(self) -> int | None:
+        return self.state.battery_pct
+
+    @property
+    def paper_ok(self) -> bool | None:
+        """``None`` means the printer has not reported -- not the same as OK.
+
+        This flips unprompted: pulling the stripe produced ``1a0688`` and replacing
+        it produced ``1a0689``, with no query in between.
+        """
+        return self.state.paper_ok
+
+    @property
+    def prints_completed(self) -> int:
+        """Count of ``0x0F`` frames -- the printer's own "I finished" signal.
+
+        Before this was decoded, a completed print could only be inferred by waiting
+        out the physical print duration.
+        """
+        return self.state.prints_completed
+
+    @property
+    def frames(self) -> list[StatusFrame]:
+        return self.state.frames
+
+    @property
+    def fields(self) -> dict[int, bytes]:
+        """Raw tag -> payload, for callers written against the pre-table API."""
+        return {f.tag: f.raw for f in self.state.frames}
+
+    @property
+    def unknown_tags(self) -> dict[int, int]:
+        """Tags with no spec, and how often each was seen.
+
+        Non-empty here means either a firmware revision we have not characterised or
+        a parser bug -- worth surfacing rather than swallowing.
+        """
+        return self.parser.unknown_tags
 
     def summary(self) -> str:
-        parts = [f"{self.acks} acks"]
-        if self.serial:
-            parts.append(f"serial={self.serial}")
-        extra = [
-            f"{fid:#04x}={val.hex()}"
-            for fid, val in sorted(self.fields.items())
-            if fid != FIELD_SERIAL
-        ]
-        if extra:
-            parts.append("fields[" + ",".join(extra) + "]")
-        return ", ".join(parts)
+        return self.state.summary()

@@ -1,16 +1,21 @@
 """The Phomemo D30 itself.
 
-Two things worth knowing before changing anything here.
+Three things worth knowing before changing anything here.
 
-**There is no read channel.** Nothing is ever received from the printer. A
-successful ``print_raster`` means the bytes were accepted by the socket and we
-waited out the physical print duration. Out-of-tape, jams and low battery are
-undetectable.
+**There is a read channel, on both transports.** The printer answers every query and
+also pushes unsolicited state changes -- pulling the tape produces a media-error frame
+with no request behind it. ``print_raster`` can therefore wait for the printer's own
+``print_complete`` (``0x0F``) rather than sleeping out the physical duration and hoping.
+The timer remains as a fallback for a link that reports nothing.
 
-**Long strips need pacing.** The printer streams rather than buffers. A 20-label
-strip is ~96KB, far more than it can hold, so writes are throttled to roughly the
-speed the head can consume them. Discrete single labels never hit this, which is
-precisely why it will not show up until someone prints a real batch.
+**Long strips need pacing, but only on BLE.** Over SPP the RFCOMM layer fragments and
+credits automatically; the 2,888-byte print write we captured reached the air as
+662-byte fragments the app never saw. Over BLE there is no such help, so the transport
+gates each write on the printer's per-packet ``0101`` ACK.
+
+**The preamble is tolerant.** The Android and iOS apps send different ones -- Android
+``LEFT_MARGIN``, iOS ``PRINT_MULTI`` + ``EXIT_COMPRESS_MODE`` -- and both print. We send
+the union, a superset of two known-good sequences.
 """
 
 from __future__ import annotations
@@ -21,7 +26,13 @@ from dataclasses import dataclass, field
 
 from labelfab.contract import PRINT_SPEED_MM_S, PX_PER_MM
 from labelfab.device.errors import D30GeometryError, D30NotReady
-from labelfab.device.escpos import INIT_PACKETS, MAX_FRAME_LINES, print_header
+from labelfab.device.protocol import (
+    DENSITIES,
+    DENSITY_MEDIUM,
+    MAX_FRAME_LINES,
+    print_preamble,
+    session_setup,
+)
 from labelfab.device.transport import Transport
 from labelfab.render.raster import DeviceRaster
 
@@ -33,21 +44,39 @@ LINES_PER_SECOND = PRINT_SPEED_MM_S * PX_PER_MM
 
 @dataclass(frozen=True, slots=True)
 class D30Config:
-    """Timing and geometry knobs, all of them hardware-verified on day one."""
+    """Timing and geometry knobs."""
 
     #: Bytes per write to the socket. Small enough to pace, large enough to be cheap.
     chunk_bytes: int = 4096
-    #: Multiplier on the theoretical print time per chunk. Above 1.0 leaves the head
-    #: room to stay ahead of the socket; tune it down until a long strip garbles.
+    #: Multiplier on the theoretical print time per chunk. Only meaningful when the
+    #: transport has no flow control of its own -- RFCOMM credits and the BLE ``0101``
+    #: ACK both make it redundant. Set to 0 to disable.
     pace_factor: float = 1.2
-    #: Pause between the seven init packets. The printer is fussy about framing.
+    #: Pause between session-setup packets.
     inter_packet_delay_s: float = 0.02
-    #: Extra settle time after the last byte of a frame, on top of the computed
-    #: print duration. Guards the next job from starting while tape is still moving.
+    #: Extra settle time after a print, on top of the computed duration.
     post_print_margin_s: float = 0.3
     #: Send a short blank feed on the first print after a wake. Some units print the
     #: first label faint otherwise; confirmed or ruled out during bring-up.
     wake_dummy_feed: bool = False
+    #: Burn darkness: 1 light, 2 medium, 4 heavy. Verified by printing one label at
+    #: each against byte-identical rasters.
+    density: int = DENSITY_MEDIUM
+    #: Head width in bytes, for ``LEFT_MARGIN`` letterboxing. ``None`` means unmeasured
+    #: and sends margin 0, which is what we did before and is byte-identical for a
+    #: full-width label. Set it to 12 (96 dots) once the width sweep confirms the head;
+    #: until then, whether 15mm tape prints 96 or 120 dots is an open question and
+    #: letterboxing on the assumption would be wrong.
+    head_width_bytes: int | None = None
+    #: Coalesce the session queries into one write, as the Android app does.
+    batch_session_queries: bool = False
+    #: Wait for the printer's ``print_complete`` frame instead of the duration timer.
+    #: Falls back to the timer if nothing arrives within the computed time plus margin.
+    await_print_complete: bool = True
+
+    def __post_init__(self) -> None:
+        if self.density not in DENSITIES:
+            raise ValueError(f"density {self.density} is not one of {DENSITIES}")
 
 
 @dataclass
@@ -55,17 +84,21 @@ class PhomemoD30:
     """Drives one printer over one transport.
 
     Reconnection is *not* handled here. The caller decides whether a
-    ``D30ConnectError`` means retry, stall or fail, because that decision needs
-    the job's deadline and the batch mode, neither of which belong in a device
-    driver.
+    ``D30ConnectError`` means retry, stall or fail, because that decision needs the
+    job's deadline and the batch mode, neither of which belong in a device driver.
     """
 
     transport: Transport
     config: D30Config = field(default_factory=D30Config)
     #: Injected so tests can run with no wall clock.
     sleep: Callable[[float], None] = time.sleep
+    #: Injected alongside ``sleep`` so completion waits are testable.
+    clock: Callable[[], float] = time.monotonic
 
     _initialised: bool = field(default=False, init=False, repr=False)
+
+    #: How often to check for the completion frame while waiting.
+    _COMPLETION_POLL_S = 0.05
 
     @property
     def model(self) -> str:
@@ -77,16 +110,20 @@ class PhomemoD30:
 
     @property
     def feedback(self):
-        """Device feedback if the transport has a read channel (BLE), else ``None``.
+        """Status accumulated on this connection. Never ``None``."""
+        return self.transport.feedback
 
-        SPP is write-only, so this is ``None`` there; over BLE it exposes the notify
-        channel's accumulated ACKs and status fields (serial, telemetry)."""
-        return getattr(self.transport, "feedback", None)
+    @property
+    def paper_ok(self) -> bool | None:
+        """``None`` when the printer has not reported -- not the same as OK."""
+        return self.transport.feedback.paper_ok
 
     def connect(self) -> None:
-        """Open the transport and run the captured session-setup sequence."""
+        """Open the transport and run the session-setup sequence."""
         self.transport.open()
-        for packet in INIT_PACKETS:
+        for packet in session_setup(
+            density=self.config.density, batched=self.config.batch_session_queries
+        ):
             self.transport.write(packet)
             self.transport.flush()
             if self.config.inter_packet_delay_s:
@@ -108,14 +145,24 @@ class PhomemoD30:
     def __exit__(self, *exc_info) -> None:
         self.close()
 
-    def print_duration_s(self, raster: DeviceRaster) -> float:
-        return raster.height_px / LINES_PER_SECOND
+    def print_duration_s(self, raster: DeviceRaster, copies: int = 1) -> float:
+        return raster.height_px * copies / LINES_PER_SECOND
 
-    def print_raster(self, raster: DeviceRaster, *, wait: bool = True) -> None:
+    def print_raster(
+        self,
+        raster: DeviceRaster,
+        *,
+        wait: bool = True,
+        copies: int = 1,
+        density: int | None = None,
+    ) -> None:
         """Send one ``GS v 0`` frame.
 
         A whole strip goes in a single frame. That is the entire economy of strip
         mode: one leader and one trailer feed for the batch rather than per label.
+
+        ``copies`` uses the printer's own ``PRINT_MULTI``, so N labels cost one
+        transmission of the raster rather than N.
         """
         if not self.is_connected:
             raise D30NotReady("connect() before printing")
@@ -124,9 +171,17 @@ class PhomemoD30:
                 f"{raster.height_px} lines exceeds one frame ({MAX_FRAME_LINES}); "
                 f"split the strip into shorter runs"
             )
+        completed_before = self.transport.feedback.prints_completed
 
-        header = print_header(raster.width_bytes, raster.height_px)
-        self.transport.write(header)
+        self.transport.write(
+            print_preamble(
+                raster.width_bytes,
+                raster.height_px,
+                density=density if density is not None else self.config.density,
+                copies=copies,
+                head_width_bytes=self.config.head_width_bytes,
+            )
+        )
         self.transport.flush()
 
         if self.config.wake_dummy_feed:
@@ -139,9 +194,35 @@ class PhomemoD30:
             self._pace(len(chunk), raster.width_bytes)
 
         if wait:
-            # No acknowledgement exists, so the only way to know the print finished
-            # is to wait as long as it physically takes.
-            self.sleep(self.print_duration_s(raster) + self.config.post_print_margin_s)
+            self._await_completion(raster, copies, completed_before)
+
+    def _await_completion(self, raster: DeviceRaster, copies: int, before: int) -> None:
+        """Wait for the printer to say it finished, or time out and assume it did.
+
+        The ``0x0F`` frame arrives about 2.4s after the last raster byte for a single
+        label. Waiting for it rather than for a computed duration is the difference
+        between "we sent bytes" and "the printer acknowledged the job".
+        """
+        budget = self.print_duration_s(raster, copies) + self.config.post_print_margin_s
+        fb = self.transport.feedback
+        # If the link has told us nothing at all so far -- no frames, no ACKs -- there
+        # is no reason to expect it to announce completion either. Sleep the duration
+        # in one go rather than polling something that will never change.
+        silent = not fb.frames and not fb.acks
+        if not self.config.await_print_complete or silent:
+            self.sleep(budget)
+            return
+        # Elapsed time is accumulated from the sleeps themselves rather than read off a
+        # clock, so an injected no-op sleep cannot spin here.
+        waited = 0.0
+        while waited < budget:
+            if fb.prints_completed > before:
+                return
+            step = min(self._COMPLETION_POLL_S, budget - waited)
+            self.sleep(step)
+            waited += step
+        # No confirmation inside the budget. The print probably succeeded, so fall
+        # back to the old duration-based assumption rather than failing it.
 
     def _pace(self, chunk_len: int, width_bytes: int) -> None:
         """Throttle to roughly the head's consumption rate."""
@@ -156,8 +237,11 @@ class PhomemoD30:
         """Build an alignment pattern: a 1px border plus rules every 8px.
 
         One print of this answers four bring-up questions at once -- effective head
-        width, tape offset, rotation and mirroring -- because a complete border
-        means the full width printed and the rules make orientation obvious.
+        width, tape offset, rotation and mirroring -- because a complete border means
+        the full width printed and the rules make orientation obvious.
+
+        The printer also has a built-in ``PRINT_TEST_PAGE`` (``1F 11 27``), which is
+        in the vendor tables but sent by no vendor app, so it is untested.
         """
         from PIL import Image, ImageDraw
 

@@ -4,6 +4,13 @@ from __future__ import annotations
 
 from conftest import make_job
 
+from labelfab.device import INIT_PACKETS, print_preamble
+
+
+def _first_body_byte() -> int:
+    """Offset of the first raster byte: session setup, then the print preamble."""
+    return sum(len(p) for p in INIT_PACKETS) + len(print_preamble(15, 320, density=2))
+
 
 def test_strip_is_one_frame(harness):
     h = harness()
@@ -46,7 +53,12 @@ def test_configured_gap_tape_forces_discrete(harness):
 
 def test_strip_partial_failure_is_terminal_and_flagged(harness):
     h = harness()
-    h.fail_after_bytes = 45  # connect + header ok, body write dies
+    # Cut the link once the preamble is out and a few body bytes have gone: the frame
+    # header committed the printer to a length it will never receive, so tape has
+    # moved. Derived rather than hardcoded -- the preamble grew when PRINT_MULTI and
+    # EXIT_COMPRESS_MODE were added, and a literal offset silently stopped meaning
+    # "mid-body" and started meaning "mid-preamble".
+    h.fail_after_bytes = _first_body_byte() + 4
     h.submit(make_job("j", n_labels=3, flush=True))
     assert h.frames == 1  # one attempt, no auto-retry -- tape may have moved
     result = h.publisher.results[-1]

@@ -79,9 +79,7 @@ class BleTransport:
 
     def _start_loop(self) -> None:
         self._loop = asyncio.new_event_loop()
-        self._thread = threading.Thread(
-            target=self._loop.run_forever, name="labelfab-ble", daemon=True
-        )
+        self._thread = threading.Thread(target=self._loop.run_forever, name="labelfab-ble", daemon=True)
         self._thread.start()
 
     def _teardown_loop(self) -> None:
@@ -110,9 +108,7 @@ class BleTransport:
         try:
             import bleak  # noqa: F401
         except ImportError as exc:  # pragma: no cover - optional dependency
-            raise D30ConnectError(
-                "the BLE transport needs bleak: pip install 'labelfab[ble]'"
-            ) from exc
+            raise D30ConnectError("the BLE transport needs bleak: pip install 'labelfab[ble]'") from exc
 
         self.feedback = DeviceFeedback()  # fresh per connection
         self._start_loop()
