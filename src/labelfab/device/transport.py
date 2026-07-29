@@ -44,6 +44,11 @@ _CONNECTION_ERRNOS = frozenset(
 )
 
 
+#: "afbluetooth" on Linux where the socket family is present, "ble" elsewhere (e.g.
+#: python-build-standalone environments that lack libbluetooth-dev).
+DEFAULT_TRANSPORT = "afbluetooth" if hasattr(socket, "AF_BLUETOOTH") else "ble"
+
+
 @runtime_checkable
 class Transport(Protocol):
     """A bidirectional byte pipe.

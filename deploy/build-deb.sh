@@ -5,7 +5,7 @@
 #   docker run --rm --platform linux/amd64 -v "$PWD:/src" -v "$PWD/dist:/out" \
 #     -e VERSION=1.2.3 -e ARCH=amd64 debian:bookworm /src/deploy/build-deb.sh
 #
-# It ships a fully self-contained, relocatable CPython from python-build-standalone
+# It ships a fully self-contained CPython built from source (to include AF_BLUETOOTH)
 # and installs the app into it. That is the whole point: a plain `python -m venv`
 # only references the build box's system python, so its stdlib path (e.g.
 # /usr/lib/python3.11) has to exist on the target too -- which breaks the moment the
@@ -19,39 +19,29 @@ set -euo pipefail
 : "${VERSION:?set VERSION}"
 : "${ARCH:?set ARCH (amd64|arm64)}"
 NFPM_VERSION="${NFPM_VERSION:-2.41.1}"
-PBS_PY="${PBS_PY:-3.12}"
-
-case "$ARCH" in
-    amd64) PBS_ARCH="x86_64" ;;
-    arm64) PBS_ARCH="aarch64" ;;
-    *) echo "unsupported ARCH: $ARCH" >&2; exit 2 ;;
-esac
+PY_VER="${PY_VER:-3.12.4}"
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y --no-install-recommends ca-certificates curl >/dev/null
+apt-get install -y --no-install-recommends ca-certificates curl build-essential \
+    libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev wget \
+    libncursesw5-dev xz-utils tk-dev libxml2-dev libxmlsec1-dev libffi-dev liblzma-dev \
+    libbluetooth-dev >/dev/null
 
 # nfpm as a .deb for this arch.
 curl -fsSL -o /tmp/nfpm.deb \
     "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VERSION}/nfpm_${NFPM_VERSION}_${ARCH}.deb"
 apt-get install -y /tmp/nfpm.deb >/dev/null
 
-# Relocatable, self-contained CPython. Pick the newest install_only build for the
-# requested minor and arch from the latest python-build-standalone release.
-echo "resolving python-build-standalone (${PBS_PY}, ${PBS_ARCH})..."
-# The `install_only_stripped` build is the distribution artifact: same self-contained
-# interpreter and full stdlib, minus debug symbols -- roughly a third of the size.
-# GitHub URL-encodes the '+' in the version tag as %2B in browser_download_url, so the
-# pattern must accept either form.
-PBS_URL="$(curl -fsSL https://api.github.com/repos/astral-sh/python-build-standalone/releases/latest \
-    | grep -oE "https://[^\"]*cpython-${PBS_PY}\.[0-9]+(\+|%2B)[0-9]+-${PBS_ARCH}-unknown-linux-gnu-install_only_stripped\.tar\.gz" \
-    | head -1)"
-test -n "$PBS_URL" || { echo "no python-build-standalone asset found for ${PBS_PY}/${PBS_ARCH}" >&2; exit 1; }
-echo "  $PBS_URL"
-
+echo "building CPython (${PY_VER}) from source..."
 mkdir -p /opt/labelfab
-curl -fsSL "$PBS_URL" -o /tmp/python.tar.gz
-tar -C /opt/labelfab -xzf /tmp/python.tar.gz   # -> /opt/labelfab/python (relocatable)
+cd /tmp
+curl -fsSL -O "https://www.python.org/ftp/python/${PY_VER}/Python-${PY_VER}.tar.xz"
+tar -xf "Python-${PY_VER}.tar.xz"
+cd "Python-${PY_VER}"
+./configure --prefix=/opt/labelfab/python --enable-optimizations >/dev/null
+make -j$(nproc) >/dev/null
+make install >/dev/null
 
 PY=/opt/labelfab/python/bin/python3
 "$PY" -m pip install --no-cache-dir --upgrade pip >/dev/null
@@ -65,6 +55,10 @@ find /opt/labelfab/python/lib -type d -name tests -prune -exec rm -rf {} + 2>/de
 
 # Sanity: the bundled interpreter must run and import the app before we package it.
 "$PY" -c "import labelfab.cli, labelfab.agent; print('bundled interpreter OK')"
+
+# Sanity: verify that the compiled Python has AF_BLUETOOTH support
+"$PY" -c "import socket; print(f'AF_BLUETOOTH is available: {hasattr(socket, \"AF_BLUETOOTH\")}')"
+"$PY" -c "import socket; assert hasattr(socket, 'AF_BLUETOOTH'), 'AF_BLUETOOTH is missing!'"
 
 mkdir -p /out
 cd /src
