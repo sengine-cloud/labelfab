@@ -36,17 +36,24 @@ curl -fsSL -o /tmp/nfpm.deb \
     "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VERSION}/nfpm_${NFPM_VERSION}_${ARCH}.deb"
 apt-get install -y /tmp/nfpm.deb >/dev/null
 
-# Relocatable, self-contained CPython. Pick the newest install_only build for the
-# requested minor and arch from the latest python-build-standalone release.
-echo "resolving python-build-standalone (${PBS_PY}, ${PBS_ARCH})..."
+# Relocatable, self-contained CPython, from a *pinned* python-build-standalone release.
+# Pinned rather than "latest" so rebuilding an old tag reproduces the interpreter it
+# shipped with, and so a PBS release cannot change what a release build produces
+# between the amd64 and arm64 legs of the same matrix. Bump deliberately.
+PBS_RELEASE="${PBS_RELEASE:-20260728}"
+echo "resolving python-build-standalone ${PBS_RELEASE} (${PBS_PY}, ${PBS_ARCH})..."
 # The `install_only_stripped` build is the distribution artifact: same self-contained
 # interpreter and full stdlib, minus debug symbols -- roughly a third of the size.
 # GitHub URL-encodes the '+' in the version tag as %2B in browser_download_url, so the
 # pattern must accept either form.
-PBS_URL="$(curl -fsSL https://api.github.com/repos/astral-sh/python-build-standalone/releases/latest \
+PBS_URL="$(curl -fsSL "https://api.github.com/repos/astral-sh/python-build-standalone/releases/tags/${PBS_RELEASE}" \
     | grep -oE "https://[^\"]*cpython-${PBS_PY}\.[0-9]+(\+|%2B)[0-9]+-${PBS_ARCH}-unknown-linux-gnu-install_only_stripped\.tar\.gz" \
     | head -1)"
-test -n "$PBS_URL" || { echo "no python-build-standalone asset found for ${PBS_PY}/${PBS_ARCH}" >&2; exit 1; }
+test -n "$PBS_URL" || {
+    echo "no python-build-standalone asset for ${PBS_PY}/${PBS_ARCH} in release ${PBS_RELEASE}" >&2
+    echo "(set PBS_RELEASE to a tag from https://github.com/astral-sh/python-build-standalone/releases)" >&2
+    exit 1
+}
 echo "  $PBS_URL"
 
 mkdir -p /opt/labelfab

@@ -96,6 +96,9 @@ def connect(sock: socket.socket, mac: str, channel: int, timeout_s: float) -> No
     sock.setblocking(False)
     if _libc.connect(sock.fileno(), buf, SOCKADDR_RC_SIZE) != 0:
         err = ctypes.get_errno()
+        # EINTR belongs with the other two rather than in a retry: a connect interrupted
+        # by a signal still completes asynchronously, and calling connect() again would
+        # get EALREADY. Waiting for writability is the correct move for all three.
         if err not in (errno.EINPROGRESS, errno.EALREADY, errno.EINTR):
             raise OSError(err, os.strerror(err))
         if not select.select([], [sock], [], timeout_s)[1]:

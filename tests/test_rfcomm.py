@@ -57,6 +57,51 @@ def test_accepts_lowercase_and_bare_addresses() -> None:
     assert _rfcomm.sockaddr_rc("AAFDFD6B9F5F", 1) == canonical
 
 
+def test_a_bad_mac_is_a_config_error_not_a_connect_error() -> None:
+    """The worker retries D30ConnectError. A typo in the MAC must not loop forever.
+
+    It also must not escape as a bare ValueError: the worker only catches D30Error, so
+    that would take the whole print loop down instead of failing the one job.
+    """
+    from labelfab.device import AFBluetoothTransport
+    from labelfab.device.errors import D30ConfigError, D30ConnectError
+
+    transport = AFBluetoothTransport("not-a-mac", channel=1)
+    try:
+        with pytest.raises(D30ConfigError) as caught:
+            transport.open()
+    except OSError as exc:  # pragma: no cover - host without kernel bluetooth
+        pytest.skip(f"no kernel bluetooth here: {exc}")
+    assert not caught.value.retryable
+    assert not isinstance(caught.value, D30ConnectError)
+    assert not transport.is_open
+
+
+def test_a_bad_mac_does_not_leak_the_socket() -> None:
+    """The fd is opened before the address is validated, so it has to be closed."""
+    import gc
+
+    from labelfab.device import AFBluetoothTransport
+    from labelfab.device.errors import D30ConfigError
+
+    def open_fd_count() -> int:
+        return len(os.listdir("/proc/self/fd"))
+
+    try:
+        _rfcomm.socket_rfcomm().close()
+    except OSError as exc:  # pragma: no cover - host without kernel bluetooth
+        pytest.skip(f"no kernel bluetooth here: {exc}")
+
+    gc.collect()
+    before = open_fd_count()
+    for _ in range(20):
+        with pytest.raises(D30ConfigError):
+            AFBluetoothTransport("nonsense", channel=1).open()
+    gc.collect()
+    # A leak would show as ~20 extra fds; allow a little slack for unrelated churn.
+    assert open_fd_count() - before < 5
+
+
 @pytest.mark.skipif(not _rfcomm.has_native_support(), reason="interpreter lacks AF_BLUETOOTH")
 def test_matches_what_cpython_would_have_produced() -> None:
     """Ground truth: bind through the shim, and via the socket module, and compare.

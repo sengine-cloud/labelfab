@@ -32,6 +32,15 @@ class D30WriteTimeout(D30Error):
     retryable = True
 
 
+class D30ConfigError(D30Error):
+    """The device configuration cannot be used -- a malformed address, say.
+
+    Deliberately not a :class:`D30ConnectError`: that one means "the printer is away",
+    which the worker is right to retry. This one will fail identically every time, so
+    retrying it just hides a typo behind a reconnect loop.
+    """
+
+
 class D30NotReady(D30Error):
     """The device was used before ``connect()``. A programming fault."""
 

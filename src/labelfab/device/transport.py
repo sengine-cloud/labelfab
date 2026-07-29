@@ -28,8 +28,15 @@ import threading
 from typing import Protocol, runtime_checkable
 
 from labelfab.device import _rfcomm
-from labelfab.device.errors import D30ConnectError, D30WriteTimeout
+from labelfab.device.errors import D30ConfigError, D30ConnectError, D30WriteTimeout
 from labelfab.device.feedback import DeviceFeedback
+
+#: The transports ``--transport`` and ``device.transport`` accept, named once so the CLI
+#: and the agent config cannot drift apart. Unlike the DEFAULT_TRANSPORT this replaces,
+#: these are plain literals -- they do not depend on how the interpreter was built.
+TRANSPORTS = ("afbluetooth", "ble", "serial", "fake")
+DEFAULT_TRANSPORT = "afbluetooth"
+
 
 #: OS errors that mean "the printer went away", as opposed to a programming fault.
 _CONNECTION_ERRNOS = frozenset(
@@ -142,6 +149,11 @@ class AFBluetoothTransport:
         try:
             _rfcomm.connect(sock, self.mac, self.channel, self.connect_timeout_s)
             sock.settimeout(self.write_timeout_s)
+        except ValueError as exc:
+            # A malformed address, which no amount of reconnecting will fix. Close the
+            # fd we just opened and raise something the worker will not retry.
+            sock.close()
+            raise D30ConfigError(f"cannot address the printer: {exc}") from exc
         except OSError as exc:
             sock.close()
             raise D30ConnectError(

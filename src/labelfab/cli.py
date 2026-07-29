@@ -14,6 +14,11 @@ from pathlib import Path
 from PIL import Image
 
 from labelfab.contract import PrintJob, job_schema
+
+# The device package is otherwise imported lazily to keep `preview` snappy, but the
+# parser needs these at build time; they cost ~23ms on a ~160ms import, which is not
+# enough to be worth a function-local import.
+from labelfab.device.transport import DEFAULT_TRANSPORT, TRANSPORTS
 from labelfab.render import RenderConfig, concat_strip, render_job, to_device
 
 
@@ -318,9 +323,7 @@ def build_parser() -> argparse.ArgumentParser:
     dec.set_defaults(func=cmd_decode)
 
     probe = sub.add_parser("probe", help="hardware bring-up patterns")
-    probe.add_argument(
-        "--transport", default="afbluetooth", choices=["afbluetooth", "ble", "serial", "fake"]
-    )
+    probe.add_argument("--transport", default=DEFAULT_TRANSPORT, choices=list(TRANSPORTS))
     probe.add_argument("--mac", help="printer Bluetooth address")
     probe.add_argument("--channel", type=int, default=1, help="RFCOMM channel (afbluetooth)")
     probe.add_argument("--port", default="/dev/rfcomm0", help="for --transport serial")
