@@ -376,6 +376,15 @@ class DeviceState:
         Only reports what it actually told us. A printer that has said nothing yields
         ``None`` here, which is not a clean bill of health -- silence and health are
         different states, and ``paper_ok`` stays ``None`` to keep them apart.
+
+        Known asymmetry between the three: ``paper_state`` is re-queried on every
+        connect (it is in the vendor session set), but ``material_error`` and
+        ``print_cancelled`` only ever arrive unsolicited. Nothing can poll them --
+        ``ALL_ERROR`` (``1f1128``) is the opcode that would, and it was verified inert
+        on fw 2.1.2. So a material fault raised on one connection is not re-asserted on
+        the next unless the printer volunteers it again, and the status falls back to
+        whatever ``paper_state`` says. Worth knowing before trusting a clean fault() as
+        proof the consumable is fine.
         """
         problems = []
         paper = self.paper
