@@ -39,9 +39,9 @@ cd /tmp
 curl -fsSL -O "https://www.python.org/ftp/python/${PY_VER}/Python-${PY_VER}.tar.xz"
 tar -xf "Python-${PY_VER}.tar.xz"
 cd "Python-${PY_VER}"
-./configure --prefix=/opt/labelfab/python --enable-optimizations >/dev/null
-make -j$(nproc) >/dev/null
-make install >/dev/null
+./configure --prefix=/opt/labelfab/python
+make -j$(nproc)
+make install
 
 PY=/opt/labelfab/python/bin/python3
 "$PY" -m pip install --no-cache-dir --upgrade pip >/dev/null
