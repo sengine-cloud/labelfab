@@ -258,3 +258,53 @@ class PhomemoD30:
         # Asymmetric corner marker: makes 180-degree rotation unambiguous.
         d.rectangle([2, 2, 10, 6], fill=1)
         return DeviceRaster(width_px=width_px, height_px=height_px, data=img.tobytes())
+
+    def head_width_probe(self, width_px: int = 120, step_px: int = 8) -> DeviceRaster:
+        """A staircase that measures the head instead of inferring it.
+
+        Whether the head is 96 or 120 dots has been an open question, and a width
+        sweep cannot settle it: the failure mode is *silent*, so "it printed" and
+        "it printed the part that fits" look identical.
+
+        This pattern reads itself. One solid block per byte-column, each one step
+        taller than the last, plus a full-width bar along the bottom:
+
+        * **Count the steps.** Each is one byte of head. 12 steps = 96 dots,
+          15 steps = 120 dots. No calipers, no arithmetic.
+        * **Look at the bottom bar.** Straight and short means the printer honoured
+          our line width and the head simply cannot reach further -- clean truncation.
+          **Diagonal** means it consumed a different number of bytes per line than we
+          sent, so each row started mid-way through the previous one. That skew is
+          the unmistakable signature of a head narrower than the frame, and it is
+          precisely what a sweep hides.
+        * **Neither** -- all steps present, bar straight and full width -- means the
+          head really is ``width_px`` dots.
+
+        Step *height* encodes column index, so the pattern also says **which** end was
+        truncated: if the shortest surviving step is taller than one unit, the low end
+        was cut rather than the high one. That distinguishes a narrow head from a tape
+        offset, which counting alone cannot.
+
+        Send this at the *widest* hypothesis (120). A narrower head reveals itself;
+        a wider one cannot be discovered by asking for less.
+
+        Cheaper first: ``LABEL_WIDTH`` (``1F 11 18``) is a read-only query that may
+        just answer. It is in the vendor tables and no vendor app sends it, so it is
+        untested -- but it costs one round-trip and no tape.
+        """
+        from PIL import Image, ImageDraw
+
+        if width_px % 8:
+            raise D30GeometryError(f"width {width_px}px is not a whole number of bytes")
+
+        columns = width_px // 8
+        bar_px = 4
+        height_px = columns * step_px + bar_px + step_px
+        img = Image.new("1", (width_px, height_px), color=0)
+        d = ImageDraw.Draw(img)
+        for i in range(columns):
+            x0 = i * 8
+            d.rectangle([x0, 0, x0 + 6, step_px * (i + 1)], fill=1)
+        # Full-width bar: straight = truncation, diagonal = byte-per-line mismatch.
+        d.rectangle([0, height_px - bar_px, width_px - 1, height_px - 1], fill=1)
+        return DeviceRaster(width_px=width_px, height_px=height_px, data=img.tobytes())
