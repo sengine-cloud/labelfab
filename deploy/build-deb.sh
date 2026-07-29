@@ -55,7 +55,8 @@ tar -C /opt/labelfab -xzf /tmp/python.tar.gz   # -> /opt/labelfab/python (reloca
 
 PY=/opt/labelfab/python/bin/python3
 "$PY" -m pip install --no-cache-dir --upgrade pip >/dev/null
-"$PY" -m pip install --no-cache-dir "/src[agent]" >/dev/null
+# [agent,ble]: the workshop D30 speaks BLE (no SPP record), so bleak ships too.
+"$PY" -m pip install --no-cache-dir "/src[agent,ble]" >/dev/null
 
 # Trim build-only bloat (tests, caches) from the shipped interpreter.
 find /opt/labelfab/python -type d -name __pycache__ -prune -exec rm -rf {} + 2>/dev/null || true

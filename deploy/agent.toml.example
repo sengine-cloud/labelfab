@@ -28,9 +28,14 @@ username = "d30-workshop"
 # password comes from LABELFAB_MQTT__PASSWORD / the systemd credential, never here.
 
 [device]
-transport = "afbluetooth"   # afbluetooth | serial | fake
+# afbluetooth = Classic SPP (RFCOMM). ble = Bluetooth LE / GATT, for D30 units that
+# expose no SPP record (sdptool browse is empty, pairing resolves a GATT profile).
+transport = "ble"            # afbluetooth | ble | serial | fake
 mac = ""                     # set after `bluetoothctl pair/trust`
-channel = 1
+channel = 1                  # afbluetooth only
+# ble only: the GATT write characteristic (ff02 on the D30) and optional adapter.
+ble_write_uuid = "0000ff02-0000-1000-8000-00805f9b34fb"
+ble_adapter = ""             # e.g. hci1; blank = default adapter
 raster_width_px = 96         # 96 = 12mm head (verified); 120 = 15mm (day-1 hypothesis)
 pace_factor = 1.2            # lower until a long strip garbles, then +50%
 wake_dummy_feed = false

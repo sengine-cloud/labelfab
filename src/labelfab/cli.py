@@ -127,14 +127,16 @@ def cmd_decode(args) -> int:
 
 
 def _open_transport(args):
-    from labelfab.device import AFBluetoothTransport, FakeTransport, SerialTransport
+    from labelfab.device import AFBluetoothTransport, BleTransport, FakeTransport, SerialTransport
 
     if args.transport == "fake":
         return FakeTransport()
     if args.transport == "serial":
         return SerialTransport(port=args.port)
     if not args.mac:
-        raise SystemExit("labelfab: --mac is required for the afbluetooth transport")
+        raise SystemExit(f"labelfab: --mac is required for the {args.transport} transport")
+    if args.transport == "ble":
+        return BleTransport(mac=args.mac, write_uuid=args.ble_write_uuid, adapter=args.adapter)
     return AFBluetoothTransport(mac=args.mac, channel=args.channel)
 
 
@@ -274,10 +276,18 @@ def build_parser() -> argparse.ArgumentParser:
     dec.set_defaults(func=cmd_decode)
 
     probe = sub.add_parser("probe", help="hardware bring-up patterns")
-    probe.add_argument("--transport", default="afbluetooth", choices=["afbluetooth", "serial", "fake"])
+    probe.add_argument(
+        "--transport", default="afbluetooth", choices=["afbluetooth", "ble", "serial", "fake"]
+    )
     probe.add_argument("--mac", help="printer Bluetooth address")
-    probe.add_argument("--channel", type=int, default=1, help="RFCOMM channel")
+    probe.add_argument("--channel", type=int, default=1, help="RFCOMM channel (afbluetooth)")
     probe.add_argument("--port", default="/dev/rfcomm0", help="for --transport serial")
+    from labelfab.device.ble import DEFAULT_WRITE_UUID
+
+    probe.add_argument(
+        "--ble-write-uuid", default=DEFAULT_WRITE_UUID, help="GATT write characteristic (ble)"
+    )
+    probe.add_argument("--adapter", default=None, help="Bluetooth adapter, e.g. hci1 (ble)")
     probe.add_argument("--width-px", type=int, default=120, help="96 for 12mm, 120 for 15mm")
     probe.add_argument("--length-px", type=int, default=320)
     probe.add_argument("--pace-factor", type=float, default=1.2)

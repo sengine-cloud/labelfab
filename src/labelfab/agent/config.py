@@ -64,10 +64,14 @@ class MqttSection(BaseModel):
 
 
 class DeviceSection(BaseModel):
-    transport: str = Field(default="afbluetooth", pattern=r"^(afbluetooth|serial|fake)$")
+    #: afbluetooth = Classic SPP (RFCOMM); ble = BLE/GATT for units with no SPP record.
+    transport: str = Field(default="afbluetooth", pattern=r"^(afbluetooth|ble|serial|fake)$")
     mac: str = ""
     channel: int = 1
     serial_port: str = "/dev/rfcomm0"
+    #: BLE write characteristic and adapter (transport = ble). ff02 is the D30's.
+    ble_write_uuid: str = "0000ff02-0000-1000-8000-00805f9b34fb"
+    ble_adapter: str = ""
     #: Effective print-head width. 96 (12mm) is the only value ever verified; 120
     #: (15mm) is a day-one hypothesis. Letterbox onto wider tape with tape.offset_px.
     raster_width_px: int = 96
