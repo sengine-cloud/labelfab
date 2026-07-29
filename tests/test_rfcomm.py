@@ -57,6 +57,21 @@ def test_accepts_lowercase_and_bare_addresses() -> None:
     assert _rfcomm.sockaddr_rc("AAFDFD6B9F5F", 1) == canonical
 
 
+def _require_kernel_bluetooth() -> None:
+    """Skip unless this kernel knows ``AF_BLUETOOTH``.
+
+    CI runners and the QEMU arm64 build leg have no bluetooth module, where ``socket()``
+    answers ``EAFNOSUPPORT`` -- which says nothing about the code under test. Preflight
+    rather than catching around the assertion: ``open()`` wraps that errno into a
+    ``D30ConnectError``, which is not an ``OSError``, so a ``try/except OSError`` around
+    the call under test would sail straight past it and fail the assertion instead.
+    """
+    try:
+        _rfcomm.socket_rfcomm().close()
+    except OSError as exc:  # pragma: no cover - host without kernel bluetooth
+        pytest.skip(f"no kernel bluetooth here: {os.strerror(exc.errno or 0)}")
+
+
 def test_a_bad_mac_is_a_config_error_not_a_connect_error() -> None:
     """The worker retries D30ConnectError. A typo in the MAC must not loop forever.
 
@@ -66,12 +81,10 @@ def test_a_bad_mac_is_a_config_error_not_a_connect_error() -> None:
     from labelfab.device import AFBluetoothTransport
     from labelfab.device.errors import D30ConfigError, D30ConnectError
 
+    _require_kernel_bluetooth()
     transport = AFBluetoothTransport("not-a-mac", channel=1)
-    try:
-        with pytest.raises(D30ConfigError) as caught:
-            transport.open()
-    except OSError as exc:  # pragma: no cover - host without kernel bluetooth
-        pytest.skip(f"no kernel bluetooth here: {exc}")
+    with pytest.raises(D30ConfigError) as caught:
+        transport.open()
     assert not caught.value.retryable
     assert not isinstance(caught.value, D30ConnectError)
     assert not transport.is_open
@@ -87,11 +100,7 @@ def test_a_bad_mac_does_not_leak_the_socket() -> None:
     def open_fd_count() -> int:
         return len(os.listdir("/proc/self/fd"))
 
-    try:
-        _rfcomm.socket_rfcomm().close()
-    except OSError as exc:  # pragma: no cover - host without kernel bluetooth
-        pytest.skip(f"no kernel bluetooth here: {exc}")
-
+    _require_kernel_bluetooth()
     gc.collect()
     before = open_fd_count()
     for _ in range(20):
@@ -110,10 +119,8 @@ def test_matches_what_cpython_would_have_produced() -> None:
     interpreter that does not need the shim, and therefore the only one that can say
     whether the shim is right.
     """
-    try:
-        shimmed = _rfcomm.socket_rfcomm()
-    except OSError as exc:  # pragma: no cover - depends on the host kernel
-        pytest.skip(f"no kernel bluetooth here: {os.strerror(exc.errno or 0)}")
+    _require_kernel_bluetooth()
+    shimmed = _rfcomm.socket_rfcomm()
     with (
         shimmed,
         socket.socket(socket.AF_BLUETOOTH, socket.SOCK_STREAM, socket.BTPROTO_RFCOMM) as native,
