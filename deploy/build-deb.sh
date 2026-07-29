@@ -1,37 +1,69 @@
 #!/usr/bin/env bash
-# Build one labelfab-agent .deb. Meant to run as root inside a debian container whose
-# python matches the target box, with the repo at /src:
+# Build one labelfab-agent .deb. Runs as root in a debian container with the repo at
+# /src:
 #
 #   docker run --rm --platform linux/amd64 -v "$PWD:/src" -v "$PWD/dist:/out" \
 #     -e VERSION=1.2.3 -e ARCH=amd64 debian:bookworm /src/deploy/build-deb.sh
 #
-# It builds a --copies venv at the final install path so shebangs resolve on the
-# target, then packages it with nfpm.
+# It ships a fully self-contained, relocatable CPython from python-build-standalone
+# and installs the app into it. That is the whole point: a plain `python -m venv`
+# only references the build box's system python, so its stdlib path (e.g.
+# /usr/lib/python3.11) has to exist on the target too -- which breaks the moment the
+# workshop box runs a different Python (Ubuntu 24.04 ships 3.12, not 3.11). The
+# standalone build carries its own stdlib and resolves its prefix from the binary
+# location, so the package works on any glibc Linux and depends only on libc6.
+#
+# The build container's own python is irrelevant now, so its version does not matter.
 set -euo pipefail
 
 : "${VERSION:?set VERSION}"
 : "${ARCH:?set ARCH (amd64|arm64)}"
 NFPM_VERSION="${NFPM_VERSION:-2.41.1}"
+PBS_PY="${PBS_PY:-3.12}"
+
+case "$ARCH" in
+    amd64) PBS_ARCH="x86_64" ;;
+    arm64) PBS_ARCH="aarch64" ;;
+    *) echo "unsupported ARCH: $ARCH" >&2; exit 2 ;;
+esac
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y --no-install-recommends \
-    python3 python3-venv python3-pip ca-certificates curl >/dev/null
+apt-get install -y --no-install-recommends ca-certificates curl >/dev/null
 
-# nfpm as a .deb for this arch (its own release assets are named by Go arch names,
-# which happen to match Debian's amd64/arm64).
+# nfpm as a .deb for this arch.
 curl -fsSL -o /tmp/nfpm.deb \
     "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VERSION}/nfpm_${NFPM_VERSION}_${ARCH}.deb"
 apt-get install -y /tmp/nfpm.deb >/dev/null
 
-# The venv is built at its install path so the copied interpreter's shebangs are
-# correct on the target. --copies avoids symlinks into the build container's python.
-python3 -m venv --copies /opt/labelfab/venv
-/opt/labelfab/venv/bin/pip install --no-cache-dir --upgrade pip >/dev/null
-/opt/labelfab/venv/bin/pip install --no-cache-dir "/src[agent]" >/dev/null
-# Trim build-only bloat from the shipped venv.
-find /opt/labelfab/venv -type d -name __pycache__ -prune -exec rm -rf {} + 2>/dev/null || true
-rm -rf /opt/labelfab/venv/share /opt/labelfab/venv/lib/python*/site-packages/pip/_vendor/*/tests 2>/dev/null || true
+# Relocatable, self-contained CPython. Pick the newest install_only build for the
+# requested minor and arch from the latest python-build-standalone release.
+echo "resolving python-build-standalone (${PBS_PY}, ${PBS_ARCH})..."
+# The `install_only_stripped` build is the distribution artifact: same self-contained
+# interpreter and full stdlib, minus debug symbols -- roughly a third of the size.
+# GitHub URL-encodes the '+' in the version tag as %2B in browser_download_url, so the
+# pattern must accept either form.
+PBS_URL="$(curl -fsSL https://api.github.com/repos/astral-sh/python-build-standalone/releases/latest \
+    | grep -oE "https://[^\"]*cpython-${PBS_PY}\.[0-9]+(\+|%2B)[0-9]+-${PBS_ARCH}-unknown-linux-gnu-install_only_stripped\.tar\.gz" \
+    | head -1)"
+test -n "$PBS_URL" || { echo "no python-build-standalone asset found for ${PBS_PY}/${PBS_ARCH}" >&2; exit 1; }
+echo "  $PBS_URL"
+
+mkdir -p /opt/labelfab
+curl -fsSL "$PBS_URL" -o /tmp/python.tar.gz
+tar -C /opt/labelfab -xzf /tmp/python.tar.gz   # -> /opt/labelfab/python (relocatable)
+
+PY=/opt/labelfab/python/bin/python3
+"$PY" -m pip install --no-cache-dir --upgrade pip >/dev/null
+"$PY" -m pip install --no-cache-dir "/src[agent]" >/dev/null
+
+# Trim build-only bloat (tests, caches) from the shipped interpreter.
+find /opt/labelfab/python -type d -name __pycache__ -prune -exec rm -rf {} + 2>/dev/null || true
+find /opt/labelfab/python/lib -type d -name test -prune -exec rm -rf {} + 2>/dev/null || true
+find /opt/labelfab/python/lib -type d -name tests -prune -exec rm -rf {} + 2>/dev/null || true
+
+# Sanity: the bundled interpreter must run and import the app before we package it.
+"$PY" -c "import labelfab.cli, labelfab.agent; print('bundled interpreter OK')"
 
 mkdir -p /out
 cd /src

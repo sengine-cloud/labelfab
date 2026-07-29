@@ -117,6 +117,20 @@ class WorkerHarness:
         self.worker.submit(job.job_id)
 
 
+@pytest.fixture(autouse=True)
+def _isolate_config(tmp_path, monkeypatch) -> None:
+    """Never read a host-installed /etc/labelfab/agent.toml during tests.
+
+    On a box where the agent package is installed, that file exists (and is mode 750,
+    owned by the labelfab user), so an un-isolated ``Config()`` would either pick up
+    the host's settings or fail with PermissionError. Point the default at a path that
+    does not exist so the suite is hermetic.
+    """
+    from labelfab.agent import config as _config
+
+    monkeypatch.setattr(_config, "DEFAULT_CONFIG_PATH", tmp_path / "no-such-agent.toml")
+
+
 @pytest.fixture
 def clock() -> Clock:
     return Clock()

@@ -1,11 +1,11 @@
 # Packaged with nfpm (https://nfpm.goreleaser.com). VERSION and ARCH come from the
 # environment so one file serves both the amd64 and arm64 matrix legs.
 #
-# What ships is a --copies venv built at the final install path (/opt/labelfab/venv)
-# inside a debian container, so shebangs and the interpreter resolve where they land.
-# A venv is not a self-contained interpreter, though: it still resolves the base
-# python's stdlib, so the package depends on the distro's python3. Build on the image
-# whose python matches the target box.
+# What ships is a fully self-contained, relocatable CPython (python-build-standalone)
+# at /opt/labelfab/python with the app installed into it. It carries its own stdlib
+# and resolves its prefix from the binary location, so it does NOT need any system
+# python and works across distros (Ubuntu 24.04 / Python 3.12, Debian, ...). The only
+# runtime library it needs is glibc. See deploy/build-deb.sh.
 name: labelfab-agent
 arch: ${ARCH}
 platform: linux
@@ -22,7 +22,6 @@ section: utils
 priority: optional
 
 depends:
-  - python3
   - libc6
   - bluez
   - dbus
@@ -37,10 +36,10 @@ contents:
   - src: deploy/agent.toml.example
     dst: /etc/labelfab/agent.toml
     type: config|noreplace # an upgrade must never clobber a configured host
-  - src: /opt/labelfab/venv/bin/labelfab
+  - src: /opt/labelfab/python/bin/labelfab
     dst: /usr/bin/labelfab
     type: symlink
-  - src: /opt/labelfab/venv/bin/labelfab-agent
+  - src: /opt/labelfab/python/bin/labelfab-agent
     dst: /usr/bin/labelfab-agent
     type: symlink
 
