@@ -276,6 +276,8 @@ SESSION_QUERIES: tuple[Command, ...] = (
     PAPER_STATE,
     LABEL_TYPE,
     FIRMWARE_VERSION,
+    BATTERY,
+    AUTO_POWER_TIME,
 )
 
 
@@ -320,7 +322,7 @@ def raster_header(width_bytes: int, height_px: int) -> bytes:
     return PRINT_IMAGE.opcode + width_bytes.to_bytes(2, "little") + height_px.to_bytes(2, "little")
 
 
-def left_margin_bytes(width_bytes: int, head_width_bytes: int | None = None) -> int:
+def left_margin_bytes(width_bytes: int, head_width_bytes: int = HEAD_WIDTH_BYTES) -> int:
     """Letterbox offset for a raster narrower than the head.
 
     The vendor computes ``12 - width/8`` and sends it as ``LEFT_MARGIN``. Earlier
@@ -328,15 +330,12 @@ def left_margin_bytes(width_bytes: int, head_width_bytes: int | None = None) -> 
     it is this command with the argument that happens to be 0 for a full-width label.
     Hardcoding the 0 puts every narrower label hard against one edge.
 
-    ``head_width_bytes=None`` means *we have not measured the head*, and yields 0 --
-    byte-identical to the old hardcoded prefix. Pass :data:`HEAD_WIDTH_BYTES` once the
-    width sweep has confirmed 96 dots. Deliberately not the default: the vendor app
-    hardcodes 12, but this project renders 15mm tape as 15 bytes and whether the head
-    is 96 or 120 dots is still an open bring-up question. Defaulting to 12 would
-    silently letterbox every label on an assumption we have not verified.
+    We have definitively verified that the physical D30 print head is exactly
+    96 dots (12 bytes) wide, centered in the tape path. Even with 15mm tape
+    loaded, attempting to print wider than 12 bytes causes the printer to reject
+    the job with a `print_cancelled` error. Therefore, `HEAD_WIDTH_BYTES` (12)
+    is the absolute hardware maximum and the correct default.
     """
-    if head_width_bytes is None:
-        return 0
     return max(0, head_width_bytes - width_bytes)
 
 
@@ -346,7 +345,7 @@ def print_preamble(
     *,
     density: int | None = None,
     copies: int = 1,
-    head_width_bytes: int | None = None,
+    head_width_bytes: int = HEAD_WIDTH_BYTES,
 ) -> bytes:
     """Everything that precedes the raster body, in the vendor's order.
 

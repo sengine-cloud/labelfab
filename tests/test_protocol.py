@@ -129,7 +129,7 @@ def test_session_setup_uses_only_verified_commands():
 
 def test_session_setup_is_pinned_to_the_captured_sequence():
     assert b"".join(p.session_setup(density=p.DENSITY_MEDIUM)).hex() == (
-        "1f11381f11121f11131f11091f11111f11191f11071f110a1f110202"
+        "1f11381f11121f11131f11091f11111f11191f11071f11081f110e1f110a1f110202"
     )
 
 

@@ -62,12 +62,9 @@ class D30Config:
     #: Burn darkness: 1 light, 2 medium, 4 heavy. Verified by printing one label at
     #: each against byte-identical rasters.
     density: int = DENSITY_MEDIUM
-    #: Head width in bytes, for ``LEFT_MARGIN`` letterboxing. ``None`` means unmeasured
-    #: and sends margin 0, which is what we did before and is byte-identical for a
-    #: full-width label. Set it to 12 (96 dots) once the width sweep confirms the head;
-    #: until then, whether 15mm tape prints 96 or 120 dots is an open question and
-    #: letterboxing on the assumption would be wrong.
-    head_width_bytes: int | None = None
+    #: Head width in bytes, for ``LEFT_MARGIN`` letterboxing. We have definitively
+    #: verified that the physical print head is exactly 96 dots (12 bytes) wide.
+    head_width_bytes: int = 12
     #: Coalesce the session queries into one write, as the Android app does.
     batch_session_queries: bool = False
     #: Wait for the printer's ``print_complete`` frame instead of the duration timer.

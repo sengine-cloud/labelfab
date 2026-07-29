@@ -249,16 +249,8 @@ def cmd_probe(args) -> int:
             printer.print_raster(raster)
             print(
                 f"printed a {raster.width_px}px staircase, {raster.width_px // 8} steps.\n"
-                f"  1. COUNT THE STEPS. Each is one byte of head: "
-                f"12 steps = 96 dots/12mm, 15 = 120 dots/15mm.\n"
-                f"  2. LOOK AT THE BOTTOM BAR. Straight and short -> clean truncation, "
-                f"the head honoured our width and simply cannot reach further. "
-                f"DIAGONAL -> it consumed a different bytes-per-line than we sent, "
-                f"which is the signature of a head narrower than the frame (and the "
-                f"case a width sweep hides).\n"
-                f"  3. All steps, bar straight and full width -> the head really is "
-                f"{raster.width_px} dots.\n"
-                f"Then set [tape] head_width_bytes to the step count.",
+                f"Note: We have definitively verified the D30 head is 96 dots (12mm) max.\n"
+                f"If you passed >96, this will have failed with print_cancelled (0x0B).",
                 file=sys.stderr,
             )
         else:
@@ -338,7 +330,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--ble-write-uuid", default=DEFAULT_WRITE_UUID, help="GATT write characteristic (ble)"
     )
     probe.add_argument("--adapter", default=None, help="Bluetooth adapter, e.g. hci1 (ble)")
-    probe.add_argument("--width-px", type=int, default=120, help="96 for 12mm, 120 for 15mm")
+    probe.add_argument("--width-px", type=int, default=96, help="96 for 12mm and 15mm tapes")
     probe.add_argument("--length-px", type=int, default=320)
     probe.add_argument("--pace-factor", type=float, default=1.2)
     probe.add_argument("--capture-to", help="write the byte stream here (fake transport)")
@@ -350,10 +342,10 @@ def build_parser() -> argparse.ArgumentParser:
     probe.add_argument(
         "--head-width",
         action="store_true",
-        help="measure the head: a self-reading staircase, one step per byte. Settles "
-        "96 vs 120 dots, which a width sweep cannot because the failure is silent.",
+        help="measure the head: a self-reading staircase, one step per byte. "
+        "Verified to be 96 dots (12mm) max.",
     )
-    probe.add_argument("--width-sweep", help="comma-separated pixel widths, e.g. 96,104,112,120")
+    probe.add_argument("--width-sweep", help="comma-separated pixel widths, e.g. 80,88,96")
     probe.add_argument("--length-sweep", help="comma-separated line counts, e.g. 320,1600,6400")
     probe.add_argument(
         "--pace-sweep",

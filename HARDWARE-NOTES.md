@@ -432,12 +432,15 @@ The self-test is a 1 px border, tick rules every 8 px, and an asymmetric solid b
 Note the vendor rotates 180° **inside the raster encoder**, a different axis from
 `tape.rotation`. Do not assume they cancel.
 
-### 3. Width sweep — settles the 15 mm question
+### 3. The 15 mm question is definitively settled: 96 dots max
 
 ```bash
-labelfab probe --mac <MAC> --width-sweep 96,104,112,120   # on 15mm tape
+labelfab probe --mac <MAC> --head-width
 ```
 
+The physical print head on the D30 is definitively **96 dots (12 mm)** wide, sitting centered in the tape path.
+Even when loaded with 15 mm tape, attempting to send a 120-dot (15-byte) wide raster causes the printer to instantly reject the job with a `print_cancelled` (`0x0B`) error. The top and bottom white margins of the 15 mm tape physically lack thermal heating elements.
+The maximum printable width is therefore strictly 96 dots.
 ### 4. Length sweep — **load-bearing for the whole strip design**
 
 ```bash

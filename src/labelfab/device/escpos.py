@@ -81,7 +81,7 @@ def print_header(
     width_bytes: int,
     height_px: int,
     *,
-    head_width_bytes: int | None = None,
+    head_width_bytes: int = HEAD_WIDTH_BYTES,
 ) -> bytes:
     """Build the frame header for a raster ``width_bytes`` wide, ``height_px`` tall.
 

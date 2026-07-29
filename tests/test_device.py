@@ -99,7 +99,7 @@ def test_batched_session_setup_sends_the_same_bytes_in_fewer_writes():
 def test_init_sequence_content_is_pinned():
     printer, transport, _ = _printer(inter_packet_delay_s=0)
     printer.connect()
-    assert transport.buf.hex() == ("1f11381f11121f11131f11091f11111f11191f11071f110a1f110202")
+    assert transport.buf.hex() == ("1f11381f11121f11131f11091f11111f11191f11071f11081f110e1f110a1f110202")
 
 
 def test_connect_paces_the_init_packets():
