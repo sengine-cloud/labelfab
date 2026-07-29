@@ -36,6 +36,7 @@ from labelfab.device.responses import (
     StatusParser,
 )
 from labelfab.device.transport import (
+    DEFAULT_TRANSPORT,
     AFBluetoothTransport,
     FakeTransport,
     SerialTransport,
@@ -55,6 +56,7 @@ __all__ = [
     "MODEL",
     "PROBE_SET",
     "TAGS",
+    "DEFAULT_TRANSPORT",
     "AFBluetoothTransport",
     "BleTransport",
     "Capabilities",
