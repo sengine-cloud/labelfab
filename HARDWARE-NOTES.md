@@ -421,6 +421,17 @@ fall back to `rfcomm bind` plus `--transport serial`.
 > `RestrictAddressFamilies=` in the unit **must** include `AF_BLUETOOTH`. Every
 > hardening cheat-sheet omits it and the failure gives no hint that systemd caused it.
 
+> **`AF_BLUETOOTH` is a kernel feature, not a library one.** CPython gates only the
+> *constants* and the `sockaddr_rc` marshalling on `bluetooth/bluetooth.h` at build
+> time, so a python built without the BlueZ headers — such as the relocatable one the
+> `.deb` ships — refuses `sock.connect((mac, channel))` even though the kernel is
+> willing. `device/_rfcomm.py` encodes the 10-byte `sockaddr_rc` and calls libc
+> `connect(2)` instead; nothing else needs a shim, because past connect an RFCOMM
+> socket is an ordinary stream. Do not "fix" this by compiling CPython with
+> `libbluetooth-dev` — that trades the interpreter's glibc-only property for
+> undeclared `libssl`/`liblzma`/`libsqlite3` dependencies on whatever the build
+> container happened to have.
+
 ### 2. Alignment — four answers from one print
 
 The self-test is a 1 px border, tick rules every 8 px, and an asymmetric solid block.

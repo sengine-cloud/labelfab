@@ -2,6 +2,7 @@ from labelfab.device.ble import DEFAULT_NOTIFY_UUID, DEFAULT_WRITE_UUID, BleTran
 from labelfab.device.d30 import MODEL, D30Config, PhomemoD30
 from labelfab.device.decode import DecodeError, Frame, decode, decode_frames, find_frames
 from labelfab.device.errors import (
+    D30ConfigError,
     D30ConnectError,
     D30Error,
     D30GeometryError,
@@ -37,6 +38,7 @@ from labelfab.device.responses import (
 )
 from labelfab.device.transport import (
     DEFAULT_TRANSPORT,
+    TRANSPORTS,
     AFBluetoothTransport,
     FakeTransport,
     SerialTransport,
@@ -57,11 +59,13 @@ __all__ = [
     "PROBE_SET",
     "TAGS",
     "DEFAULT_TRANSPORT",
+    "TRANSPORTS",
     "AFBluetoothTransport",
     "BleTransport",
     "Capabilities",
     "Command",
     "D30Config",
+    "D30ConfigError",
     "D30ConnectError",
     "D30Error",
     "D30GeometryError",

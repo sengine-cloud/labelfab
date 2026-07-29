@@ -115,3 +115,45 @@ def test_dedupe_key_skips_a_second_job(harness):
     result = h.publisher.results[-1]
     assert result.state == "completed"
     assert result.labels[0].state == "skipped_duplicate"
+
+
+def _counting_factory(harness, error: Exception):
+    """A printer_factory that fails connect with ``error`` and counts the attempts."""
+    from labelfab.device import FakeTransport, PhomemoD30
+    from labelfab.device.d30 import D30Config
+
+    attempts: list[int] = []
+
+    class _Failing(FakeTransport):
+        def open(self) -> None:
+            attempts.append(1)
+            raise error
+
+    def factory() -> PhomemoD30:
+        return PhomemoD30(_Failing(), D30Config(pace_factor=0.0), sleep=lambda _s: None)
+
+    harness.worker.printer_factory = factory
+    return attempts
+
+
+def test_a_permanent_connect_failure_is_not_retried(harness):
+    """A malformed device.mac fails once; the retry would re-read the same bad string.
+
+    The backoff exists for a printer that has auto-powered-off, not for a typo.
+    """
+    from labelfab.device.errors import D30ConfigError
+
+    h = harness()
+    attempts = _counting_factory(h, D30ConfigError("cannot address the printer: nope"))
+    h.submit(make_job("j", n_labels=1, flush=True))
+    assert len(attempts) == 1
+
+
+def test_a_transient_connect_failure_still_gets_every_attempt(harness):
+    """The counterpart: an asleep printer must keep its full retry budget."""
+    from labelfab.device.errors import D30ConnectError
+
+    h = harness()
+    attempts = _counting_factory(h, D30ConnectError("printer is asleep"))
+    h.submit(make_job("j", n_labels=1, flush=True))
+    assert len(attempts) == h.worker.max_attempts

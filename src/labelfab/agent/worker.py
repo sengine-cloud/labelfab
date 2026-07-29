@@ -309,7 +309,11 @@ class PrintWorker:
             except D30Error as exc:  # never wrote a byte
                 printer.close()
                 last = str(exc)
-                if attempt + 1 < self.max_attempts:
+                # Mirrors the print path below: a connect failure is usually the D30
+                # having auto-powered-off, which a retry fixes, but some are permanent
+                # (a malformed device.mac). Retrying those just spends the backoff
+                # budget re-reading the same broken config string.
+                if exc.retryable and attempt + 1 < self.max_attempts:
                     self.sleep(_BACKOFF_S[min(attempt, len(_BACKOFF_S) - 1)])
                     continue
                 return self._Send(ok=False, wrote=False, error=last)
