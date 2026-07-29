@@ -4,6 +4,13 @@ from __future__ import annotations
 
 from conftest import make_job
 
+from labelfab.device import INIT_PACKETS, print_preamble
+
+
+def _first_body_byte() -> int:
+    """Offset of the first raster byte: session setup, then the print preamble."""
+    return sum(len(p) for p in INIT_PACKETS) + len(print_preamble(15, 320, density=2))
+
 
 def test_strip_is_one_frame(harness):
     h = harness()
@@ -32,18 +39,26 @@ def test_nothing_prints_until_idle_then_flushes(harness, clock):
     assert h.publisher.results[-1].state == "completed"
 
 
-def test_geometry_change_flushes_the_pending_strip(harness):
+def test_configured_gap_tape_forces_discrete(harness):
+    # The loaded media is the agent's own knowledge: configuring die-cut (gap) tape
+    # makes a strip-mode job print discretely -- one frame per label -- regardless of
+    # what the job claimed, because a multi-label frame would print across the gaps.
     h = harness(max_labels=100, max_length_mm=10_000)
-    h.submit(make_job("a", n_labels=1, tape_width_mm=12.0))
-    assert h.frames == 0
-    h.submit(make_job("b", n_labels=1, tape_width_mm=15.0))  # different width
-    assert h.frames == 1  # 'a' was flushed before 'b' could join
-    assert h.spool.result_for("a").state == "completed"
+    h.config.tape.kind = "gap"
+    h.config.tape.length_mm = 30.0
+    h.submit(make_job("j", n_labels=3, batch_mode="strip"))
+    assert h.frames == 3
+    assert h.publisher.results[-1].state == "completed"
 
 
 def test_strip_partial_failure_is_terminal_and_flagged(harness):
     h = harness()
-    h.fail_after_bytes = 45  # connect + header ok, body write dies
+    # Cut the link once the preamble is out and a few body bytes have gone: the frame
+    # header committed the printer to a length it will never receive, so tape has
+    # moved. Derived rather than hardcoded -- the preamble grew when PRINT_MULTI and
+    # EXIT_COMPRESS_MODE were added, and a literal offset silently stopped meaning
+    # "mid-body" and started meaning "mid-preamble".
+    h.fail_after_bytes = _first_body_byte() + 4
     h.submit(make_job("j", n_labels=3, flush=True))
     assert h.frames == 1  # one attempt, no auto-retry -- tape may have moved
     result = h.publisher.results[-1]

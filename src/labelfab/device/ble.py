@@ -19,11 +19,14 @@ import concurrent.futures
 import threading
 
 from labelfab.device.errors import D30ConnectError, D30WriteTimeout
+from labelfab.device.feedback import ACK, DeviceFeedback
 
 #: Vendor GATT write characteristic. Established by the D30 BLE references
 #: (crabdancing/phomemo-d30, polskafan/phomemo_d30); ``ff01``/``ff03`` are the
 #: alternates to try if a firmware revision doesn't accept writes here.
 DEFAULT_WRITE_UUID = "0000ff02-0000-1000-8000-00805f9b34fb"
+#: Notify characteristic that streams per-packet ACKs and status frames.
+DEFAULT_NOTIFY_UUID = "0000ff03-0000-1000-8000-00805f9b34fb"
 
 
 class BleTransport:
@@ -39,23 +42,34 @@ class BleTransport:
         mac: str,
         write_uuid: str = DEFAULT_WRITE_UUID,
         *,
+        notify_uuid: str = DEFAULT_NOTIFY_UUID,
         adapter: str | None = None,
         connect_timeout_s: float = 20.0,
         write_timeout_s: float = 10.0,
-        # write-without-response matches the references and is what most printer
-        # characteristics support; flip to True if a strip garbles and you want the
-        # link layer to flow-control each chunk.
+        # write-without-response matches the references and is what the D30's write
+        # characteristic supports.
         write_response: bool = False,
+        # Gate each packet on the printer's per-packet ACK notification, so writes
+        # never outrun what it can consume (the reliable path once we have the notify
+        # channel). Falls through after ack_timeout_s so a missed ACK can't hang.
+        flow_control: bool = True,
+        ack_timeout_s: float = 0.25,
     ) -> None:
         self.mac = mac
         self.write_uuid = write_uuid
+        self.notify_uuid = notify_uuid
         self.adapter = adapter
         self.connect_timeout_s = connect_timeout_s
         self.write_timeout_s = write_timeout_s
         self.write_response = write_response
+        self.flow_control = flow_control
+        self.ack_timeout_s = ack_timeout_s
+        #: Status streamed on the notify characteristic; readable after a print.
+        self.feedback = DeviceFeedback()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
         self._client = None
+        self._ack: asyncio.Event | None = None
 
     @property
     def is_open(self) -> bool:
@@ -65,9 +79,7 @@ class BleTransport:
 
     def _start_loop(self) -> None:
         self._loop = asyncio.new_event_loop()
-        self._thread = threading.Thread(
-            target=self._loop.run_forever, name="labelfab-ble", daemon=True
-        )
+        self._thread = threading.Thread(target=self._loop.run_forever, name="labelfab-ble", daemon=True)
         self._thread.start()
 
     def _teardown_loop(self) -> None:
@@ -96,10 +108,9 @@ class BleTransport:
         try:
             import bleak  # noqa: F401
         except ImportError as exc:  # pragma: no cover - optional dependency
-            raise D30ConnectError(
-                "the BLE transport needs bleak: pip install 'labelfab[ble]'"
-            ) from exc
+            raise D30ConnectError("the BLE transport needs bleak: pip install 'labelfab[ble]'") from exc
 
+        self.feedback = DeviceFeedback()  # fresh per connection
         self._start_loop()
         try:
             self._run(self._connect(), self.connect_timeout_s + 5)
@@ -124,6 +135,17 @@ class BleTransport:
         client = BleakClient(self.mac, **kwargs)
         await client.connect()
         self._client = client
+        self._ack = asyncio.Event()
+        try:
+            await client.start_notify(self.notify_uuid, self._on_notify)
+        except Exception:
+            # A firmware without the notify characteristic still prints -- just blind.
+            self._ack = None
+
+    def _on_notify(self, _handle, data) -> None:
+        self.feedback.ingest(data)
+        if self._ack is not None and bytes(data) == ACK:
+            self._ack.set()
 
     def write(self, data: bytes) -> None:
         if not self.is_open:
@@ -141,10 +163,19 @@ class BleTransport:
         # chunked for pacing.
         mtu = getattr(self._client, "mtu_size", 23) or 23
         chunk = max(20, mtu - 3)
+        gated = self.flow_control and self._ack is not None
         for offset in range(0, len(data), chunk):
+            if gated:
+                self._ack.clear()  # type: ignore[union-attr]
             await self._client.write_gatt_char(
                 self.write_uuid, data[offset : offset + chunk], response=self.write_response
             )
+            if gated:
+                try:
+                    # Wait for the printer's per-packet ACK, so we never outrun it.
+                    await asyncio.wait_for(self._ack.wait(), self.ack_timeout_s)  # type: ignore[union-attr]
+                except asyncio.TimeoutError:
+                    pass  # a missed ACK must not hang the print; pace on
 
     def flush(self) -> None:
         """No-op: each write is dispatched to the device synchronously above."""

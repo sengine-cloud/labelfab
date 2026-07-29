@@ -17,6 +17,7 @@ needs the job deadline and the batch mode -- neither of which belongs in a drive
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -25,11 +26,13 @@ from labelfab.agent.coalescer import Batch, Coalescer, PendingLabel
 from labelfab.agent.config import Config
 from labelfab.agent.publisher import Publisher
 from labelfab.agent.spool import Spool
-from labelfab.contract import JobResult, LabelResult, PrinterStatus, PrintJob
+from labelfab.contract import JobResult, LabelResult, PrinterStatus, PrintJob, TapeSpec
 from labelfab.device.d30 import MODEL, PhomemoD30
 from labelfab.device.errors import D30Error
 from labelfab.render import RenderConfig, concat_strip, render_label, to_device
 from labelfab.render.errors import RenderError
+
+log = logging.getLogger("labelfab.worker")
 
 #: Backoff between reconnect attempts within one send, in seconds.
 _BACKOFF_S = (1.0, 3.0, 9.0)
@@ -85,6 +88,8 @@ class PrintWorker:
         self.retry_interval_s = retry_interval_s
         #: job_id -> last stall time, so a napping printer is retried, not busy-looped.
         self._stalled: dict[str, float] = {}
+        #: Latest device serial reported by the printer, on either transport.
+        self._device_serial: str | None = None
         self.coalescer = Coalescer(
             max_wait_s=config.strip.max_wait_s,
             max_length_mm=config.strip.max_length_mm,
@@ -105,6 +110,15 @@ class PrintWorker:
             separator_mm=self.config.strip.separator_mm,
         )
 
+    def _loaded_tape(self) -> TapeSpec:
+        """The media in the printer, per the agent's [tape] config. Authoritative over
+        whatever a job claims -- a producer cannot know what tape was last loaded."""
+        return TapeSpec(
+            width_mm=self.config.tape.width_mm,
+            kind=self.config.tape.kind,
+            length_mm=self.config.tape.length_mm,
+        )
+
     # -- public entry points ------------------------------------------------ #
 
     def submit(self, job_id: str) -> None:
@@ -118,6 +132,10 @@ class PrintWorker:
         acc = _JobAcc(job=job)
         self._acc[job_id] = acc
 
+        # The loaded media is the agent's own knowledge, not the producer's, so the
+        # configured tape overrides the job's geometry (width, kind, fixed length).
+        tape = self._loaded_tape()
+
         already = self.spool.printed_labels(job_id)  # crash-recovery: skip finished labels
         cfg = self._render_cfg()
         queued: list[tuple[int, object]] = []
@@ -130,7 +148,7 @@ class PrintWorker:
                 acc.render_states[idx] = LabelResult(index=idx, state="skipped_duplicate")
                 continue
             try:
-                image = render_label(label, job.tape, cfg)
+                image = render_label(label, tape, cfg)
             except RenderError as exc:
                 acc.render_states[idx] = LabelResult(
                     index=idx, state="failed", error=str(exc), retryable=False
@@ -146,14 +164,14 @@ class PrintWorker:
             self._finalize(job_id)
             return
 
-        discrete = job.options.batch_mode == "discrete" or job.tape.kind == "gap"
+        discrete = job.options.batch_mode == "discrete" or tape.kind == "gap"
         if discrete:
             self._flush()  # preserve arrival order relative to any pending strip
             self._run_discrete(job_id, queued)
             return
 
         for idx, image in queued:
-            width = job.tape.width_mm
+            width = tape.width_mm
             if not self.coalescer.accepts(width):
                 self._flush()  # a different tape width cannot share this frame
             self.coalescer.add(PendingLabel(job_id, idx, image), width)  # type: ignore[arg-type]
@@ -306,9 +324,23 @@ class PrintWorker:
                     self.sleep(_BACKOFF_S[min(attempt, len(_BACKOFF_S) - 1)])
                     continue
                 return self._Send(ok=False, wrote=True, error=last)
+            self._capture_feedback(printer)
             printer.close()
             return self._Send(ok=True, wrote=True)
         return self._Send(ok=False, wrote=False, error=last or "no attempt made")
+
+    def _capture_feedback(self, printer: PhomemoD30) -> None:
+        """Record what the printer told us during this print.
+
+        Every transport carries feedback -- SPP answers queries and pushes media-state
+        changes just as BLE does -- so this is unconditional. A transport that somehow
+        has no ``feedback`` is a programming error worth surfacing, not a case to
+        silently skip; the previous ``None`` guard would have hidden exactly that.
+        """
+        fb = printer.feedback
+        if fb.serial:
+            self._device_serial = fb.serial
+        log.info("device feedback: %s", fb.summary())
 
     # -- result accounting -------------------------------------------------- #
 
@@ -389,6 +421,7 @@ class PrintWorker:
                 printer_id=self.config.agent.printer_id,
                 state=state,  # type: ignore[arg-type]
                 model=MODEL,
+                serial=self._device_serial,
                 tape_width_mm=self.config.tape.width_mm,
                 pending_labels=pending,
             )

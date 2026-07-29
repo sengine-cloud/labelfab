@@ -181,8 +181,7 @@ def cmd_probe(args) -> int:
             unit = printer.self_test(args.width_px, args.length_px)
             printer.print_raster(_stack(unit, args.strip))
             print(
-                f"printed {args.strip} labels as ONE strip "
-                f"({args.strip * args.length_px} lines).",
+                f"printed {args.strip} labels as ONE strip ({args.strip * args.length_px} lines).",
                 file=sys.stderr,
             )
             if args.measure_waste:
@@ -214,8 +213,51 @@ def cmd_probe(args) -> int:
             for lines in [int(n) for n in args.length_sweep.split(",")]:
                 printer.print_raster(printer.self_test(args.width_px, lines))
                 print(f"printed {lines} lines ({lines / 7.992:.0f}mm)", file=sys.stderr)
+        elif args.head_width:
+            import time as _time
+
+            from labelfab.device.protocol import LABEL_WIDTH
+
+            # Free first: a read-only query that costs no tape. Untested -- it is in
+            # the vendor tables and no vendor app sends it, so we do not know which
+            # tag it answers with (or whether it answers at all). Report whatever
+            # arrives rather than looking up a name we are only guessing.
+            before = len(printer.feedback.frames)
+            printer.transport.write(LABEL_WIDTH())
+            printer.transport.flush()
+            _time.sleep(0.5)
+            new = printer.feedback.frames[before:]
+            if new:
+                print(
+                    "LABEL_WIDTH answered: " + ", ".join(f"{f} (tag 0x{f.tag:02x})" for f in new),
+                    file=sys.stderr,
+                )
+            else:
+                print(
+                    "LABEL_WIDTH returned nothing within 500ms -- falling back to the "
+                    "staircase. (Expected: no vendor app sends this opcode.)",
+                    file=sys.stderr,
+                )
+            if printer.feedback.unknown_tags:
+                print(
+                    f"undecoded tags seen: "
+                    f"{ {hex(t): n for t, n in printer.feedback.unknown_tags.items()} }",
+                    file=sys.stderr,
+                )
+
+            raster = printer.head_width_probe(args.width_px)
+            printer.print_raster(raster)
+            print(
+                f"printed a {raster.width_px}px staircase, {raster.width_px // 8} steps.\n"
+                f"Note: We have definitively verified the D30 head is 96 dots (12mm) max.\n"
+                f"If you passed >96, this will have failed with print_cancelled (0x0B).",
+                file=sys.stderr,
+            )
         else:
-            print("nothing to do; pass --self-test, --width-sweep or --length-sweep", file=sys.stderr)
+            print(
+                "nothing to do; pass --self-test, --head-width, --width-sweep or --length-sweep",
+                file=sys.stderr,
+            )
             return 2
 
         if args.transport == "fake":
@@ -288,7 +330,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--ble-write-uuid", default=DEFAULT_WRITE_UUID, help="GATT write characteristic (ble)"
     )
     probe.add_argument("--adapter", default=None, help="Bluetooth adapter, e.g. hci1 (ble)")
-    probe.add_argument("--width-px", type=int, default=120, help="96 for 12mm, 120 for 15mm")
+    probe.add_argument("--width-px", type=int, default=96, help="96 for 12mm and 15mm tapes")
     probe.add_argument("--length-px", type=int, default=320)
     probe.add_argument("--pace-factor", type=float, default=1.2)
     probe.add_argument("--capture-to", help="write the byte stream here (fake transport)")
@@ -297,7 +339,13 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="border + rules: answers head width, offset, rotation and mirror at once",
     )
-    probe.add_argument("--width-sweep", help="comma-separated pixel widths, e.g. 96,104,112,120")
+    probe.add_argument(
+        "--head-width",
+        action="store_true",
+        help="measure the head: a self-reading staircase, one step per byte. "
+        "Verified to be 96 dots (12mm) max.",
+    )
+    probe.add_argument("--width-sweep", help="comma-separated pixel widths, e.g. 80,88,96")
     probe.add_argument("--length-sweep", help="comma-separated line counts, e.g. 320,1600,6400")
     probe.add_argument(
         "--pace-sweep",

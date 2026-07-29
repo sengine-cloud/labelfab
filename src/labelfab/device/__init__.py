@@ -1,4 +1,4 @@
-from labelfab.device.ble import DEFAULT_WRITE_UUID, BleTransport
+from labelfab.device.ble import DEFAULT_NOTIFY_UUID, DEFAULT_WRITE_UUID, BleTransport
 from labelfab.device.d30 import MODEL, D30Config, PhomemoD30
 from labelfab.device.decode import DecodeError, Frame, decode, decode_frames, find_frames
 from labelfab.device.errors import (
@@ -9,6 +9,32 @@ from labelfab.device.errors import (
     D30WriteTimeout,
 )
 from labelfab.device.escpos import INIT_PACKETS, print_header
+from labelfab.device.feedback import DeviceFeedback
+from labelfab.device.protocol import (
+    DENSITIES,
+    DENSITY_HEAVY,
+    DENSITY_LIGHT,
+    DENSITY_MEDIUM,
+    FORBIDDEN,
+    HEAD_WIDTH_BYTES,
+    PROBE_SET,
+    Command,
+    Danger,
+    Support,
+    auto_shutdown_minutes,
+    left_margin_bytes,
+    print_preamble,
+    raster_header,
+    session_setup,
+)
+from labelfab.device.responses import (
+    TAGS,
+    Capabilities,
+    DeviceState,
+    PaperState,
+    StatusFrame,
+    StatusParser,
+)
 from labelfab.device.transport import (
     AFBluetoothTransport,
     FakeTransport,
@@ -17,25 +43,48 @@ from labelfab.device.transport import (
 )
 
 __all__ = [
+    "DEFAULT_NOTIFY_UUID",
     "DEFAULT_WRITE_UUID",
+    "DENSITIES",
+    "DENSITY_HEAVY",
+    "DENSITY_LIGHT",
+    "DENSITY_MEDIUM",
+    "FORBIDDEN",
+    "HEAD_WIDTH_BYTES",
     "INIT_PACKETS",
     "MODEL",
+    "PROBE_SET",
+    "TAGS",
     "AFBluetoothTransport",
     "BleTransport",
+    "Capabilities",
+    "Command",
     "D30Config",
     "D30ConnectError",
     "D30Error",
     "D30GeometryError",
     "D30NotReady",
     "D30WriteTimeout",
+    "Danger",
     "DecodeError",
+    "DeviceFeedback",
+    "DeviceState",
     "FakeTransport",
     "Frame",
+    "PaperState",
     "PhomemoD30",
     "SerialTransport",
+    "StatusFrame",
+    "StatusParser",
+    "Support",
     "Transport",
+    "auto_shutdown_minutes",
     "decode",
     "decode_frames",
     "find_frames",
+    "left_margin_bytes",
     "print_header",
+    "print_preamble",
+    "raster_header",
+    "session_setup",
 ]

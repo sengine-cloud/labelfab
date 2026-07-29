@@ -9,15 +9,25 @@ Three implementations behind one Protocol:
   ``/dev/rfcommN``. Kept for A/B comparison during hardware bring-up.
 * ``FakeTransport`` -- captures bytes and flush boundaries so the whole stack can
   be tested with no printer.
+
+All of them expose a ``feedback`` attribute carrying the printer's status frames, so
+the driver above cannot tell SPP from BLE. The delivery differs -- BLE gets discrete
+``ff03`` notifications plus per-write ``0101`` ACKs, SPP gets an unframed byte stream
+with no ACKs -- but :class:`~labelfab.device.responses.StatusParser` normalises both.
+
+The D30 *does* answer over SPP; the earlier belief that it was write-only came from
+never having read the socket.
 """
 
 from __future__ import annotations
 
 import errno
 import socket
+import threading
 from typing import Protocol, runtime_checkable
 
 from labelfab.device.errors import D30ConnectError, D30WriteTimeout
+from labelfab.device.feedback import DeviceFeedback
 
 #: OS errors that mean "the printer went away", as opposed to a programming fault.
 _CONNECTION_ERRNOS = frozenset(
@@ -36,7 +46,14 @@ _CONNECTION_ERRNOS = frozenset(
 
 @runtime_checkable
 class Transport(Protocol):
-    """A byte sink. Deliberately narrow: the D30 has no read channel."""
+    """A bidirectional byte pipe.
+
+    ``feedback`` accumulates whatever the printer sends back. It is always present so
+    callers never branch on transport type; on a link that happens to deliver nothing
+    it simply stays empty.
+    """
+
+    feedback: DeviceFeedback
 
     def open(self) -> None: ...
 
@@ -69,13 +86,25 @@ class AFBluetoothTransport:
     """
 
     def __init__(
-        self, mac: str, channel: int = 1, connect_timeout_s: float = 10.0, write_timeout_s: float = 5.0
+        self,
+        mac: str,
+        channel: int = 1,
+        connect_timeout_s: float = 10.0,
+        write_timeout_s: float = 5.0,
+        *,
+        read: bool = True,
     ) -> None:
         self.mac = mac
         self.channel = channel
         self.connect_timeout_s = connect_timeout_s
         self.write_timeout_s = write_timeout_s
+        #: Run a reader thread. The printer answers queries and pushes unsolicited
+        #: media-error notifications over SPP, so this is on by default.
+        self.read = read
+        self.feedback = DeviceFeedback()
         self._sock: socket.socket | None = None
+        self._reader: threading.Thread | None = None
+        self._stop = threading.Event()
 
     @property
     def is_open(self) -> bool:
@@ -106,6 +135,38 @@ class AFBluetoothTransport:
                 f"Is the printer awake and paired?"
             ) from exc
         self._sock = sock
+        self.feedback = DeviceFeedback()  # fresh per connection
+        if self.read:
+            self._stop.clear()
+            self._reader = threading.Thread(
+                target=self._read_loop, name=f"d30-spp-reader-{self.mac}", daemon=True
+            )
+            self._reader.start()
+
+    def _read_loop(self) -> None:
+        """Drain the socket into ``feedback`` until close.
+
+        Status frames arrive unframed and can straddle reads, which is why the parser
+        is incremental rather than per-packet. Errors end the loop quietly -- a reader
+        thread must never be the thing that takes down a print.
+        """
+        sock = self._sock
+        if sock is None:
+            return
+        while not self._stop.is_set():
+            try:
+                sock.settimeout(0.5)
+                data = sock.recv(512)
+            except (TimeoutError, socket.timeout):
+                continue
+            except OSError:
+                return  # socket closed under us, or the printer went away
+            if not data:
+                return  # clean EOF
+            try:
+                self.feedback.ingest(data)
+            except Exception:  # a decode fault must not kill the reader
+                continue
 
     def write(self, data: bytes) -> None:
         if self._sock is None:
@@ -119,12 +180,16 @@ class AFBluetoothTransport:
         """No-op: ``sendall`` has already handed the bytes to the kernel."""
 
     def close(self) -> None:
+        self._stop.set()
         if self._sock is not None:
             try:
                 self._sock.close()
             except OSError:
                 pass  # closing must never raise; the socket is going away regardless
             self._sock = None
+        if self._reader is not None:
+            self._reader.join(timeout=1.0)
+            self._reader = None
 
 
 class SerialTransport:
@@ -133,6 +198,9 @@ class SerialTransport:
     def __init__(self, port: str = "/dev/rfcomm0", write_timeout_s: float = 5.0) -> None:
         self.port = port
         self.write_timeout_s = write_timeout_s
+        #: Present for interface parity. Nothing drains the port here -- pyserial is
+        #: only used for A/B comparison during bring-up, so reads stay out of it.
+        self.feedback = DeviceFeedback()
         self._port = None
 
     @property
@@ -197,6 +265,15 @@ class FakeTransport:
         self._open = False
         #: Simulate a mid-transfer disconnect, for testing partial-strip handling.
         self.fail_after_bytes = fail_after_bytes
+        self.feedback = DeviceFeedback()
+
+    def inject(self, data: bytes) -> None:
+        """Simulate the printer sending something back.
+
+        Lets tests drive the status path -- print-complete, an unsolicited media
+        error -- without a printer or a transport-specific fake.
+        """
+        self.feedback.ingest(data)
 
     @property
     def is_open(self) -> bool:

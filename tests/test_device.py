@@ -68,26 +68,47 @@ def test_a_frame_taller_than_the_16bit_field_is_refused():
 # --------------------------------------------------------------------------- #
 
 
-def test_init_is_seven_separately_flushed_writes():
-    """The printer is picky about framing; these must not be coalesced."""
+def test_init_is_one_flushed_write_per_packet():
+    """Every packet is written and flushed separately by default.
+
+    This used to assert seven writes on the grounds that "the printer is picky about
+    framing". The captures do not support that: the Android app coalesces four
+    queries into a single write (``1f11381f11121f11131f1107``) and the printer answers
+    all four in order. Framing is not load-bearing, so the count here just records
+    the default (one write per query, plus the density packet) rather than a
+    constraint. ``batch_session_queries=True`` collapses it to two.
+    """
     printer, transport, _ = _printer(inter_packet_delay_s=0)
     printer.connect()
 
-    assert len(transport.writes) == 7
-    assert len(transport.flushes) == 7
+    assert len(transport.writes) == len(INIT_PACKETS)
+    assert len(transport.flushes) == len(INIT_PACKETS)
     assert transport.buf == b"".join(INIT_PACKETS)
+
+
+def test_batched_session_setup_sends_the_same_bytes_in_fewer_writes():
+    unbatched, t_un, _ = _printer(inter_packet_delay_s=0)
+    unbatched.connect()
+    batched, t_b, _ = _printer(inter_packet_delay_s=0, batch_session_queries=True)
+    batched.connect()
+
+    assert t_b.buf == t_un.buf, "batching must not change a single byte"
+    assert len(t_b.writes) == 2  # all queries coalesced, then the density packet
 
 
 def test_init_sequence_content_is_pinned():
     printer, transport, _ = _printer(inter_packet_delay_s=0)
     printer.connect()
-    assert transport.buf.hex() == ("1f11381f11121f11131f11091f11111f11191f11071f110a1f110202")
+    assert transport.buf.hex() == (
+        "1f11381f11121f11131f11091f11111f11191f1107"
+        "1f11081f110e1f110a1f110202"
+    )
 
 
 def test_connect_paces_the_init_packets():
     printer, _, slept = _printer(inter_packet_delay_s=0.02)
     printer.connect()
-    assert slept == [0.02] * 7
+    assert slept == [0.02] * len(INIT_PACKETS)
 
 
 def test_printing_before_connecting_is_a_programming_error():
@@ -171,7 +192,7 @@ def test_writes_are_chunked():
     with printer:
         printer.print_raster(raster, wait=False)
 
-    body_writes = transport.writes[7 + 1 :]  # 7 init packets, then the header
+    body_writes = transport.writes[len(INIT_PACKETS) + 1 :]  # init packets, then the preamble
     assert len(body_writes) == 15
     assert sum(body_writes) == len(raster.data)
 
@@ -195,8 +216,13 @@ def test_pace_factor_zero_disables_throttling():
     assert slept == []
 
 
-def test_wait_sleeps_for_the_physical_print_duration():
-    """There is no acknowledgement, so elapsed time is the only completion signal."""
+def test_wait_sleeps_for_the_physical_print_duration_when_the_link_is_silent():
+    """A transport that has reported nothing gets the old duration-based wait.
+
+    The printer does acknowledge completion (``0x0F``), but a link that has produced
+    neither a status frame nor an ACK gives no reason to expect it to, so waiting out
+    the physical duration stays the fallback rather than polling something inert.
+    """
     printer, _, slept = _printer(inter_packet_delay_s=0, pace_factor=0, post_print_margin_s=0.3)
     raster = _blank(120, mm_to_px(40))
 
@@ -336,3 +362,63 @@ def test_self_test_rejects_a_non_byte_aligned_width():
     printer, _, _ = _printer()
     with pytest.raises(D30GeometryError, match="whole number of bytes"):
         printer.self_test(100, 200)
+
+
+# --------------------------------------------------------------------------- #
+# Density and copies. Both are printer features we were not using.
+# --------------------------------------------------------------------------- #
+
+
+def test_density_is_configurable_and_reaches_the_wire():
+    from labelfab.device import DENSITY_HEAVY
+
+    printer, transport, _ = _printer(inter_packet_delay_s=0, pace_factor=0, density=DENSITY_HEAVY)
+    with printer:
+        printer.print_raster(_blank(120, 32), wait=False)
+    assert bytes.fromhex("1f110204") in bytes(transport.buf)
+
+
+def test_an_unobserved_density_value_is_refused():
+    with pytest.raises(ValueError, match="not one of"):
+        D30Config(density=3)
+
+
+def test_copies_use_print_multi_rather_than_resending_the_raster():
+    """One raster serves N labels; the vendor's iOS app does exactly this."""
+    printer, transport, _ = _printer(inter_packet_delay_s=0, pace_factor=0)
+    raster = _blank(120, 320)
+    with printer:
+        printer.print_raster(raster, wait=False, copies=3)
+
+    assert bytes.fromhex("1f112103") in bytes(transport.buf)
+    assert len(find_frames(bytes(transport.buf))) == 1  # not three
+    assert bytes(transport.buf).count(raster.data) == 1
+
+
+def test_a_single_copy_omits_print_multi():
+    printer, transport, _ = _printer(inter_packet_delay_s=0, pace_factor=0)
+    with printer:
+        printer.print_raster(_blank(120, 32), wait=False, copies=1)
+    assert bytes.fromhex("1f1121") not in bytes(transport.buf)
+
+
+def test_print_complete_ends_the_wait_early():
+    """The printer's own 0x0F beats the duration timer."""
+    printer, transport, slept = _printer(inter_packet_delay_s=0, pace_factor=0, post_print_margin_s=0.3)
+    with printer:
+        transport.inject(bytes.fromhex("0101"))  # link is demonstrably alive
+        transport.inject(bytes.fromhex("1a0f0c"))  # ...and already reported completion
+        printer.print_raster(_blank(120, mm_to_px(40)), wait=True)
+
+    expected = mm_to_px(40) / LINES_PER_SECOND + 0.3
+    assert sum(slept) < expected, "should have returned before the full duration"
+
+
+def test_media_error_is_visible_through_the_driver():
+    printer, transport, _ = _printer(inter_packet_delay_s=0)
+    with printer:
+        assert printer.paper_ok is None  # nothing reported yet
+        transport.inject(bytes.fromhex("1a0688"))
+        assert printer.paper_ok is False
+        transport.inject(bytes.fromhex("1a0689"))
+        assert printer.paper_ok is True
