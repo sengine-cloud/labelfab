@@ -20,7 +20,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -28,6 +28,7 @@ from pydantic_settings import (
     TomlConfigSettingsSource,
 )
 
+from labelfab.device.protocol import DENSITIES, DENSITY_LIGHT
 from labelfab.device.transport import DEFAULT_TRANSPORT, TRANSPORTS
 
 #: Where the packaged config lives; overridable for tests and the dir-only mode.
@@ -85,11 +86,23 @@ class DeviceSection(BaseModel):
     raster_width_px: int = 96
     #: Throttle multiplier for long strips; tuned down until a strip garbles, +50%.
     pace_factor: float = 1.2
+    #: Print density: 1 light / 2 medium / 4 heavy. Light is gentlest on the head and
+    #: the tape and is what HARDWARE-NOTES recommends trying first; raise it if codes
+    #: stop scanning. Until this existed the agent could not set density at all.
+    density: int = DENSITY_LIGHT
     #: A blank feed on the first print after a wake, if bring-up finds faint labels.
     wake_dummy_feed: bool = False
     #: Drop the socket between batches: the D30 auto-sleeps, so a held-open socket
     #: just relocates the failure. Reconnect-per-batch is cheaper to reason about.
     idle_disconnect: bool = True
+
+    @field_validator("density")
+    @classmethod
+    def _density_is_known(cls, value: int) -> int:
+        # Fail at config load rather than on the first print attempt.
+        if value not in DENSITIES:
+            raise ValueError(f"density {value} is not one of {DENSITIES}")
+        return value
 
 
 class TapeSection(BaseModel):

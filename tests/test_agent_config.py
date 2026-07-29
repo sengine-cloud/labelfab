@@ -32,3 +32,25 @@ def test_env_overrides_toml(tmp_path, monkeypatch):
     cfg = load(toml)
     assert cfg.mqtt.host == "from-file"  # untouched keys still come from the file
     assert cfg.mqtt.password == "from-env"  # secret arrives from the environment
+
+
+def test_density_defaults_to_light_and_reaches_the_driver():
+    """The agent had no density knob at all, so D30Config's medium default always won."""
+    from labelfab.agent.__main__ import make_printer_factory
+
+    cfg = Config()
+    assert cfg.device.density == 1  # light
+
+    cfg.device.transport = "fake"
+    printer = make_printer_factory(cfg)()
+    assert printer.config.density == 1
+
+
+def test_an_unknown_density_is_rejected_at_load():
+    import pytest
+    from pydantic import ValidationError
+
+    from labelfab.agent.config import DeviceSection
+
+    with pytest.raises(ValidationError, match="not one of"):
+        DeviceSection(density=3)

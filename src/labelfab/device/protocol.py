@@ -113,13 +113,13 @@ LABEL_WIDTH = Command("LABEL_WIDTH", _ctrl(0x18), D, note="head width; would set
 ALL_ERROR = Command(
     "ALL_ERROR", _ctrl(0x28), D, note="comprehensive error word; would decode the PAPER_STATE bits"
 )
-HARDWARE_VERSION = Command("HARDWARE_VERSION", _ctrl(0x33), D)
+HARDWARE_VERSION = Command("HARDWARE_VERSION", _ctrl(0x33), V, note="-> 0x11, 3 bytes; 01 00 03")
 COMM_VERSION = Command(
     "COMM_VERSION", _ctrl(0x34), D, note="protocol version; useful for feature gating"
 )
-SENSOR_INFO = Command("SENSOR_INFO", _ctrl(0x1D), D)
+SENSOR_INFO = Command("SENSOR_INFO", _ctrl(0x1D), V, note="-> 0x2D, 13 bytes, layout unknown")
 SENSOR_HEAT = Command("SENSOR_HEAT", _ctrl(0x3A), D)
-VOLTAGE = Command("VOLTAGE", _ctrl(0x1F), D)
+VOLTAGE = Command("VOLTAGE", _ctrl(0x1F), V, note="-> 0x2F, big-endian 10mV units")
 CHARGE_MODE = Command("CHARGE_MODE", _ctrl(0x43), D)
 COMPRESS_TYPE = Command("COMPRESS_TYPE", _ctrl(0x51), D, note="whether minilzo raster is supported")
 COMPRESS_SIZE = Command("COMPRESS_SIZE", _ctrl(0x36), D)
@@ -279,6 +279,20 @@ SESSION_QUERIES: tuple[Command, ...] = (
     BATTERY,
     AUTO_POWER_TIME,
 )
+
+#: Read-only queries we send *in addition* to the vendor session set, for our own
+#: status reporting. Kept separate so ``session_setup`` stays byte-identical to the
+#: capture -- that fidelity is what makes a wire diff against the vendor app meaningful.
+#:
+#: VOLTAGE is here because BATTERY pins at 100% whenever the unit is on charge, so it
+#: cannot answer "will this survive a long strip". VOLTAGE can: 4.17V on charge against
+#: 4.09V discharged, same unit.
+TELEMETRY_QUERIES: tuple[Command, ...] = (VOLTAGE,)
+
+
+def telemetry_refresh() -> bytes:
+    """One write carrying the extra status queries. Empty tuple -> empty bytes."""
+    return b"".join(c() for c in TELEMETRY_QUERIES)
 
 
 def session_setup(*, density: int = DENSITY_MEDIUM, batched: bool = False) -> tuple[bytes, ...]:

@@ -55,6 +55,16 @@ def _pct(b: bytes) -> int:
     return b[0]
 
 
+def _decivolts(b: bytes) -> float:
+    """Battery terminal voltage, big-endian in 10mV units.
+
+    Worth having alongside ``battery``: that one pins at 100% on charge, while this
+    tracked 4.16 -> 4.17V over a few seconds on the bench and read 4.09V on a
+    discharged unit's self-test page.
+    """
+    return int.from_bytes(b, "big") / 100
+
+
 def _version(b: bytes) -> str:
     return ".".join(str(x) for x in b)
 
@@ -81,12 +91,15 @@ TAGS: dict[int, TagSpec] = {
     0x0C: TagSpec("label_type", 1, lambda b: b[0], "✓"),
     0x0E: TagSpec("p1000_state", 1),
     0x0F: TagSpec("print_complete", 1, lambda b: b[0], "✓ arrives ~2.4s after the raster"),
+    0x11: TagSpec("hardware_version", 3, _version, "✓ HARDWARE_VERSION reply; 01 00 03 -> 1.0.3"),
     0x15: TagSpec("consumable_remaining", 3, None, "ribbon / RFID / carbon belt"),
     0x16: TagSpec(
         "reset_paper_ok", 4, None, "✓ VERIFY_PAPER ack; the vendor app discards these 4 bytes"
     ),
     0x17: TagSpec("bt_chip_type", 1, lambda b: b[0], "✓"),
     0x20: TagSpec("unknown_20", 1),
+    0x2D: TagSpec("sensor_info", 13, None, "✓ SENSOR_INFO reply; field layout not decoded"),
+    0x2F: TagSpec("voltage_v", 2, _decivolts, "✓ VOLTAGE reply; big-endian, 10mV units"),
     0x31: TagSpec("rfid_number", 3),
     0x35: TagSpec("charging", 1, lambda b: b[0] == 2),
     0x3B: TagSpec(
@@ -335,6 +348,46 @@ class DeviceState:
         p = self.paper
         return None if p is None else p.ok
 
+    @property
+    def voltage_v(self) -> float | None:
+        """Battery terminal voltage. More useful than ``battery_pct`` while charging."""
+        v = self.values.get("voltage_v")
+        return v if isinstance(v, float) else None
+
+    @property
+    def material_error(self) -> int | None:
+        """The ``0x3F`` consumable/material code. Non-zero is a fault."""
+        v = self.values.get("material_error")
+        return v if isinstance(v, int) else None
+
+    @property
+    def print_cancelled(self) -> bool:
+        """Whether the printer reported ``0x0B``.
+
+        Observed when a raster is wider than the head: the D30 refuses the job rather
+        than printing a truncated label, so this is the difference between "we sent
+        bytes" and "it declined them".
+        """
+        return "print_cancelled" in self.values
+
+    def fault(self) -> str | None:
+        """What the printer is complaining about, or ``None`` if nothing.
+
+        Only reports what it actually told us. A printer that has said nothing yields
+        ``None`` here, which is not a clean bill of health -- silence and health are
+        different states, and ``paper_ok`` stays ``None`` to keep them apart.
+        """
+        problems = []
+        paper = self.paper
+        if paper is not None and not paper.ok:
+            problems.append(f"media not ready ({paper})")
+        material = self.material_error
+        if material:
+            problems.append(f"material error 0x{material:02x}")
+        if self.print_cancelled:
+            problems.append("printer cancelled the print")
+        return "; ".join(problems) or None
+
     def summary(self) -> str:
         parts = [f"{self.acks} acks"]
         if self.serial:
@@ -343,6 +396,8 @@ class DeviceState:
             parts.append(f"fw={self.firmware}")
         if self.battery_pct is not None:
             parts.append(f"battery={self.battery_pct}%")
+        if self.voltage_v is not None:
+            parts.append(f"{self.voltage_v:.2f}V")
         if self.paper is not None:
             parts.append(str(self.paper))
         if self.prints_completed:
@@ -350,7 +405,7 @@ class DeviceState:
         extra = [
             f"{k}={v}"
             for k, v in sorted(self.values.items())
-            if k not in {"serial", "firmware", "battery", "paper_state"}
+            if k not in {"serial", "firmware", "battery", "paper_state", "voltage_v"}
         ]
         if extra:
             parts.append("[" + ", ".join(extra) + "]")

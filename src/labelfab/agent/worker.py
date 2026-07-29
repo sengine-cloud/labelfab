@@ -26,7 +26,14 @@ from labelfab.agent.coalescer import Batch, Coalescer, PendingLabel
 from labelfab.agent.config import Config
 from labelfab.agent.publisher import Publisher
 from labelfab.agent.spool import Spool
-from labelfab.contract import JobResult, LabelResult, PrinterStatus, PrintJob, TapeSpec
+from labelfab.contract import (
+    PX_PER_MM,
+    JobResult,
+    LabelResult,
+    PrinterStatus,
+    PrintJob,
+    TapeSpec,
+)
 from labelfab.device.d30 import MODEL, PhomemoD30
 from labelfab.device.errors import D30Error
 from labelfab.render import RenderConfig, concat_strip, render_label, to_device
@@ -90,6 +97,12 @@ class PrintWorker:
         self._stalled: dict[str, float] = {}
         #: Latest device serial reported by the printer, on either transport.
         self._device_serial: str | None = None
+        self._device_firmware: str | None = None
+        self._device_battery_pct: int | None = None
+        self._device_voltage_v: float | None = None
+        self._device_media_ok: bool | None = None
+        #: Last fault the printer reported, or None. Drives the "error" status state.
+        self._device_fault: str | None = None
         self.coalescer = Coalescer(
             max_wait_s=config.strip.max_wait_s,
             max_length_mm=config.strip.max_length_mm,
@@ -112,9 +125,26 @@ class PrintWorker:
 
     def _loaded_tape(self) -> TapeSpec:
         """The media in the printer, per the agent's [tape] config. Authoritative over
-        whatever a job claims -- a producer cannot know what tape was last loaded."""
+        whatever a job claims -- a producer cannot know what tape was last loaded.
+
+        Capped at the print head. The head is 96 dots (12mm) and the tape can be wider;
+        rendering to the full tape width produces a raster the printer *refuses*,
+        answering ``print_cancelled`` (0x0B) and printing nothing. Verified on hardware:
+        a 120px raster on 15mm tape was cancelled, the same label at 96px printed. Until
+        now ``device.raster_width_px`` was declared and read by nothing, so the shipped
+        default of 15mm tape cancelled every job.
+        """
+        head_mm = self.config.device.raster_width_px / PX_PER_MM
+        width_mm = min(self.config.tape.width_mm, head_mm)
+        if width_mm < self.config.tape.width_mm:
+            log.debug(
+                "tape is %.1fmm but the head covers %.1fmm; rendering at the head width "
+                "(use tape.offset_px to position it on the wider stock)",
+                self.config.tape.width_mm,
+                head_mm,
+            )
         return TapeSpec(
-            width_mm=self.config.tape.width_mm,
+            width_mm=width_mm,
             kind=self.config.tape.kind,
             length_mm=self.config.tape.length_mm,
         )
@@ -254,7 +284,7 @@ class PrintWorker:
                 self._acc[pl.job_id].partial_tape = True  # tape moved, unknowable amount
         for job_id in batch.job_ids:
             self._maybe_finalize(job_id)
-        self._publish_status("idle")
+        self._publish_status(self._settled_state())
 
     def _run_discrete(self, job_id: str, queued: list[tuple[int, object]]) -> None:
         for index, image in queued:
@@ -276,7 +306,7 @@ class PrintWorker:
             else:
                 self._fail_copy(job_id, index)  # wrote but failed: one label lost
         self._maybe_finalize(job_id)
-        self._publish_status("idle")
+        self._publish_status(self._settled_state())
 
     def _stall(self, job_ids: list[str]) -> None:
         now = self.clock()
@@ -306,6 +336,8 @@ class PrintWorker:
             printer = self.printer_factory()
             try:
                 printer.connect()
+                # Our extra status queries, kept out of the pinned session sequence.
+                printer.refresh_telemetry()
             except D30Error as exc:  # never wrote a byte
                 printer.close()
                 last = str(exc)
@@ -320,6 +352,9 @@ class PrintWorker:
             try:
                 printer.print_raster(raster)
             except D30Error as exc:
+                # Capture first: a media fault is usually the reason this failed, and
+                # closing without reading it throws away the only useful diagnosis.
+                self._capture_feedback(printer)
                 printer.close()
                 last = str(exc)
                 if is_strip:
@@ -342,9 +377,24 @@ class PrintWorker:
         silently skip; the previous ``None`` guard would have hidden exactly that.
         """
         fb = printer.feedback
+        # Only overwrite what it actually reported this time: a connection that
+        # answered nothing must not blank out a serial we already know. The fault is
+        # the exception -- it is recomputed every time, so a cleared media error
+        # clears the status rather than latching an error forever.
         if fb.serial:
             self._device_serial = fb.serial
+        if fb.firmware:
+            self._device_firmware = fb.firmware
+        if fb.battery_pct is not None:
+            self._device_battery_pct = fb.battery_pct
+        if fb.voltage_v is not None:
+            self._device_voltage_v = fb.voltage_v
+        if fb.paper_ok is not None:
+            self._device_media_ok = fb.paper_ok
+        self._device_fault = fb.fault()
         log.info("device feedback: %s", fb.summary())
+        if self._device_fault:
+            log.warning("printer reports a fault: %s", self._device_fault)
 
     # -- result accounting -------------------------------------------------- #
 
@@ -419,6 +469,15 @@ class PrintWorker:
 
     # -- status ------------------------------------------------------------- #
 
+    def _settled_state(self) -> str:
+        """What to publish once a batch is done.
+
+        "idle" unless the printer is complaining. Kept explicit rather than folded into
+        ``_publish_status`` so "printing" and "disconnected" -- which are facts about
+        the link, not the media -- are never silently rewritten.
+        """
+        return "error" if self._device_fault else "idle"
+
     def _publish_status(self, state: str, *, pending: int = 0) -> None:
         self.publisher.publish_status(
             PrinterStatus(
@@ -426,7 +485,12 @@ class PrintWorker:
                 state=state,  # type: ignore[arg-type]
                 model=MODEL,
                 serial=self._device_serial,
+                firmware=self._device_firmware,
+                battery_pct=self._device_battery_pct,
+                voltage_v=self._device_voltage_v,
+                media_ok=self._device_media_ok,
                 tape_width_mm=self.config.tape.width_mm,
                 pending_labels=pending,
+                error=self._device_fault,
             )
         )

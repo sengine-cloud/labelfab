@@ -245,6 +245,18 @@ class PrinterStatus(Base):
     #: Device serial, as reported by the printer. Available on both transports --
     #: SPP answers queries too; we simply never read the socket before.
     serial: str | None = None
+    #: Firmware the printer reports (``0x07``), e.g. ``"2.1.2"``. Lets a consumer gate
+    #: on firmware without anyone having to read the label on the box.
+    firmware: str | None = None
+    #: Battery percentage (``0x04``). Pins at 100 while the unit is on charge, so
+    #: ``voltage_v`` is the better signal for "is this about to die mid-strip".
+    battery_pct: int | None = None
+    #: Battery terminal voltage (``0x2F``). Observed 4.17V charging, 4.09V discharged.
+    voltage_v: float | None = None
+    #: Whether the printer says media is loaded and feeding (``0x06`` bit 0). ``None``
+    #: means it has not said -- which is not the same as OK, and must not be shown as
+    #: healthy.
+    media_ok: bool | None = None
     tape_width_mm: float | None = None
     pending_labels: int = 0
     error: str | None = None

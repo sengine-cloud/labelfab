@@ -563,3 +563,84 @@ tshark -r d30-ios.pklg -Y 'btatt.opcode==0x52 || btatt.opcode==0x12 || btatt.opc
 `0x52` = write command (phone→printer, handle `0x0008`), `0x1b` = notification
 (printer→phone, handle `0x000a`). Reassemble by concatenating all `0x0008` writes and
 splitting on the `1d763000` marker.
+
+---
+
+## Session 2026-07-30 — live SPP verification on fw 2.1.2
+
+All of the below was measured over Classic SPP against unit `Q223P4C31420105`
+(fw `2.1.2`, hw `1.0.3`), driven from the relocatable interpreter with no
+`socket.AF_BLUETOOTH`. Independently corroborated by the printer's own info label,
+which reads `SN: Q223P4C31420105 / MAC: AAFDFD6B9F5F / VER: 2.1.2.B` — three values
+matching what the parser decoded, so the tag table is right rather than merely
+self-consistent.
+
+### Three previously-unknown response tags ✅
+
+| Query | Reply | Decode |
+|---|---|---|
+| `VOLTAGE` `1f111f` | `1a 2f 01 a0` | **`0x2F`**, 2 bytes big-endian, 10 mV units → 4.16 V |
+| `SENSOR_INFO` `1f111d` | `1a 2d 02 00 …  e6 00 …` | **`0x2D`**, 13-byte payload, field layout still unknown |
+| `HARDWARE_VERSION` `1f1133` | `1a 11 01 00 03` | **`0x11`**, 3 bytes → `1.0.3` |
+
+`0x2F` sampled 4.16 → 4.17 V over a few seconds on charge, against `4.09V` on the
+discharged unit's own info label. **This is the battery signal worth having:** `BATTERY`
+(`0x04`) returned `0x64` = 100% the entire time the unit was charging, so it cannot
+answer "will this survive a long strip". Voltage can.
+
+### Opcodes that exist and do nothing ❌
+
+Sent, no reply, no observable effect. All three were `DECOMPILED`-only guesses:
+
+| Opcode | Expected | Actual |
+|---|---|---|
+| `PRINT_TEST_PAGE` `1f1127` | built-in self test | **nothing** — no frame, no tape movement |
+| `ALL_ERROR` `1f1128` | comprehensive error word | **nothing** |
+| `LABEL_WIDTH` `1f1118` | head width | **nothing** — closes the "ask the printer its own width" idea for good |
+
+The head width therefore still has to be measured, not asked. `LABEL_WIDTH` staying
+silent is consistent with the earlier `--head-width` probe finding.
+
+### `print_complete` timing — the margin was far too small 🔑
+
+`0x0F` arrives **~3.0 s after the last raster byte** (measured: 4.1 s after the write
+began, of which 1.1 s was the write). Same order as the ~2.4 s noted earlier, and
+roughly **7×** what the head's line rate predicts — a 200-line label computes to 0.42 s.
+
+`post_print_margin_s` was `0.3`, so the budget was ~0.72 s for a 200-line label and
+expired before the printer ever answered. `await_print_complete` therefore *never*
+succeeded on short labels and silently fell back to the duration guess it exists to
+replace. Now `3.5`, which costs nothing on the happy path because the wait returns as
+soon as the frame lands.
+
+### Over-wide rasters are refused, not truncated ⚠️
+
+A **120 px** raster (15 mm tape × 7.992 px/mm) came back `print_cancelled`
+(`1a 0b b8`) and printed **nothing**. The identical label at **96 px** printed and
+answered `print_complete`. The head is 96 dots and it would rather refuse than clip.
+
+This mattered in production: `device.raster_width_px` was declared in the config and
+read by *nothing*, while the worker rendered at `tape.width_mm` — whose shipped default
+is 15 mm. Every job would have been cancelled. Rendering is now capped at the head.
+
+### Density 1 (light) is scannable ✅
+
+A QR printed at `density = 1` was photographed by a webcam at an angle and decoded
+correctly as its payload by `zxing-cpp` — as-is, upscaled, and autocontrasted. Light is
+enough for codes on this stock, and is the gentler default for head and tape.
+
+### Reconnect and wedged-link recovery
+
+The D30 accepts **one** RFCOMM connection. Reconnecting immediately after a close gives
+`EBUSY` (errno 16) while the old session tears down — so a reconnect needs a short
+delay, which the agent's 1/3/9 s backoff already provides.
+
+A link can wedge harder than that: an ACL stays listed by `hcitool con`
+(`state 1 ... AUTH ENCRYPT`) and every connect returns `EBUSY` or `EALREADY`.
+`hcitool dc <bdaddr>` **times out** and does not clear it. What does:
+
+```bash
+sudo hciconfig hci1 reset      # tears down every link from our side
+```
+
+After that the printer answered on the first attempt.

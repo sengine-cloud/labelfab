@@ -100,8 +100,7 @@ def test_init_sequence_content_is_pinned():
     printer, transport, _ = _printer(inter_packet_delay_s=0)
     printer.connect()
     assert transport.buf.hex() == (
-        "1f11381f11121f11131f11091f11111f11191f1107"
-        "1f11081f110e1f110a1f110202"
+        "1f11381f11121f11131f11091f11111f11191f11071f11081f110e1f110a1f110202"
     )
 
 
@@ -422,3 +421,43 @@ def test_media_error_is_visible_through_the_driver():
         assert printer.paper_ok is False
         transport.inject(bytes.fromhex("1a0689"))
         assert printer.paper_ok is True
+
+
+def _printer_that_answers_after(seconds: float, margin: float):
+    """A printer whose ``0x0F`` lands ``seconds`` into the post-print wait."""
+    transport = FakeTransport()
+    elapsed = 0.0
+    printer = PhomemoD30(
+        transport,
+        D30Config(pace_factor=0.0, post_print_margin_s=margin),
+        sleep=lambda s: _advance(s),
+    )
+
+    def _advance(s: float) -> None:
+        nonlocal elapsed
+        elapsed += s
+        if elapsed >= seconds and printer.feedback.prints_completed == 0:
+            transport.inject(bytes.fromhex("1a0f0c"))  # print_complete, as captured
+
+    printer.connect()
+    transport.inject(bytes.fromhex("1a0689"))  # a live link, so the wait polls
+    return printer
+
+
+def test_completion_wait_covers_the_printers_real_reporting_latency():
+    """``0x0F`` lands ~3s after the raster on fw 2.1.2, not within the head's line rate.
+
+    A 200-line label computes to 0.42s of printing, so the budget is almost entirely
+    ``post_print_margin_s``. If that is short, the wait gives up before the printer
+    ever answers and silently degrades to the duration guess it exists to replace.
+    """
+    printer = _printer_that_answers_after(3.0, margin=3.5)
+    printer.print_raster(printer.self_test(96, 200))
+    assert printer.feedback.prints_completed == 1
+
+
+def test_the_old_margin_would_have_missed_it():
+    """Pins the regression: 0.3s of slack cannot see a 3s reply."""
+    printer = _printer_that_answers_after(3.0, margin=0.3)
+    printer.print_raster(printer.self_test(96, 200))
+    assert printer.feedback.prints_completed == 0

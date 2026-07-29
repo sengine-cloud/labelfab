@@ -32,6 +32,7 @@ from labelfab.device.protocol import (
     MAX_FRAME_LINES,
     print_preamble,
     session_setup,
+    telemetry_refresh,
 )
 from labelfab.device.transport import Transport
 from labelfab.render.raster import DeviceRaster
@@ -54,8 +55,15 @@ class D30Config:
     pace_factor: float = 1.2
     #: Pause between session-setup packets.
     inter_packet_delay_s: float = 0.02
-    #: Extra settle time after a print, on top of the computed duration.
-    post_print_margin_s: float = 0.3
+    #: Slack on top of the computed print duration when waiting for ``0x0F``.
+    #: Measured on fw 2.1.2: the frame lands ~3.0s after the last raster byte, which is
+    #: the same order as the ~2.4s in HARDWARE-NOTES and *far* more than the head's own
+    #: line rate predicts (a 200-line label computes to 0.42s). At the old 0.3s the
+    #: budget expired before the printer ever answered, so await_print_complete could
+    #: not succeed on short labels -- it silently degraded to the duration guess it
+    #: exists to replace. Costs nothing on the happy path: the wait returns as soon as
+    #: the frame arrives.
+    post_print_margin_s: float = 3.5
     #: Send a short blank feed on the first print after a wake. Some units print the
     #: first label faint otherwise; confirmed or ruled out during bring-up.
     wake_dummy_feed: bool = False
@@ -126,6 +134,20 @@ class PhomemoD30:
             if self.config.inter_packet_delay_s:
                 self.sleep(self.config.inter_packet_delay_s)
         self._initialised = True
+
+    def refresh_telemetry(self) -> None:
+        """Send the extra status queries that the vendor session set omits.
+
+        Separate from :meth:`connect` on purpose: ``session_setup`` is pinned
+        byte-for-byte to the captured vendor sequence, which is what makes a wire diff
+        against the vendor app meaningful, so our own additions do not belong inside it.
+        Replies land in ``feedback`` asynchronously like every other status frame.
+        """
+        packet = telemetry_refresh()
+        if not packet:
+            return
+        self.transport.write(packet)
+        self.transport.flush()
 
     def close(self) -> None:
         """Idempotent, and never raises."""
