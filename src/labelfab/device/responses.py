@@ -18,8 +18,8 @@ tag and lets each branch decide how far to advance. Two branches get it wrong:
   with no listener the payload byte gets reparsed as a tag.
 
 Unknown tags are not skipped there either; they fall into the same length-prefixed
-reader. So we are table-driven on payload length, and an unknown tag costs exactly one
-byte and a warning instead of silently eating the rest of the buffer.
+reader. So we are table-driven on payload length, and an unknown tag costs its prefix
+and tag plus a warning instead of silently eating the rest of the buffer.
 """
 
 from __future__ import annotations
@@ -242,10 +242,15 @@ class StatusParser:
             self.unknown_tags[tag] = self.unknown_tags.get(tag, 0) + 1
             if self.strict:
                 raise ValueError(f"unknown status tag 0x{tag:02x}")
-            # One byte, not a length-prefixed gamble. Worst case we resync on the
-            # next prefix; we never eat the rest of the buffer.
-            log.warning("unknown status tag 0x%02x, skipping", tag)
-            return None, 1
+            # Drop the prefix *and* the tag. Dropping only the prefix would leave the
+            # unknown tag at the head of the buffer, where it is not a prefix, so the
+            # next pass would fall into the resync scan -- and that scan stops at the
+            # first 0x1A/0x1B it finds, which inside an unknown payload could be a
+            # data byte rather than a frame start. Consuming both bytes keeps the
+            # damage to the frame we already could not read. Still bounded: never a
+            # length-prefixed gamble, and never the rest of the buffer.
+            log.warning("unknown status tag 0x%02x, skipping prefix and tag", tag)
+            return None, 2
 
         if spec.length == LENGTH_PREFIXED:
             if len(buf) < 3:

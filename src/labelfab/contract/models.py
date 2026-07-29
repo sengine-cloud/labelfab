@@ -236,11 +236,14 @@ class PrinterStatus(Base):
 
     v: Literal[1] = 1
     printer_id: str
-    #: Deliberately omits NO_MEDIA / PAPER_JAM: the protocol has no read channel,
-    #: so the agent can never observe them and must not claim to.
+    #: Still omits NO_MEDIA / PAPER_JAM, but no longer because they are unobservable:
+    #: the printer reports media state on both transports and pushes it unsolicited
+    #: (``0x06`` bit 0). Only bit 0 is decoded and jam has no known encoding, so the
+    #: enum stays narrow until we can distinguish the cases rather than guess.
     state: Literal["idle", "printing", "disconnected", "error"]
     model: str | None = None
-    #: Device serial, when the transport has a read channel to report it (BLE).
+    #: Device serial, as reported by the printer. Available on both transports --
+    #: SPP answers queries too; we simply never read the socket before.
     serial: str | None = None
     tape_width_mm: float | None = None
     pending_labels: int = 0

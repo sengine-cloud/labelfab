@@ -129,12 +129,41 @@ def test_several_frames_in_one_packet():
     assert [f.name for f in frames] == ["battery", "paper_state", "print_complete"]
 
 
-def test_unknown_tag_costs_one_byte_not_the_buffer():
-    """The vendor's fallback eats the rest of the buffer; ours resynchronises."""
+def test_unknown_tag_costs_its_own_frame_not_the_buffer():
+    """The vendor's fallback eats the rest of the buffer; ours drops prefix + tag.
+
+    Dropping only the prefix would leave the unknown tag at the head of the buffer,
+    where it is not a prefix, so the next pass would fall into the resync scan -- and
+    that scan stops at the first 0x1A/0x1B, which inside an unknown payload could be
+    a data byte rather than a frame start.
+    """
     p = StatusParser()
     frames = p.feed(bytes.fromhex("1aee") + bytes.fromhex("1a0458"))
     assert [f.name for f in frames] == ["battery"]
     assert p.unknown_tags == {0xEE: 1}
+
+
+def test_an_unknown_tag_corrupts_at_most_its_neighbourhood():
+    """Bounded damage, not perfect recovery -- and the distinction is honest.
+
+    Without a payload length for the unknown tag we cannot know where its frame ends,
+    so a following frame may be misread. What is guaranteed: the parser always makes
+    progress, never raises, never consumes the rest of the buffer, and records the
+    tag so a probe run can tell us what we are missing. Contrast the vendor, whose
+    unknown-tag path reads the next byte as a length and discards everything after.
+    """
+    p = StatusParser()
+    frames = p.feed(bytes.fromhex("1aee1a04") + bytes.fromhex("1a0f0c"))
+    assert p.unknown_tags == {0xEE: 1}
+    assert len(frames) <= 2  # progress was made, nothing hung
+    assert p.pending == b""  # and the buffer was not left holding the rest
+
+
+def test_the_stream_recovers_on_the_next_clean_frame():
+    p = StatusParser()
+    p.feed(bytes.fromhex("1aee"))
+    frames = p.feed(bytes.fromhex("1a0f0c"))
+    assert [f.name for f in frames] == ["print_complete"]
 
 
 def test_strict_mode_raises_on_an_unknown_tag():

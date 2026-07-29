@@ -96,7 +96,7 @@ class TapeSection(BaseModel):
     width_mm: float = Field(default=15.0, ge=6, le=15)
     #: ``gap`` = die-cut labels (the firmware aligns to the die gap, which forces
     #: discrete mode -- one frame per label, never a multi-label strip across gaps).
-    kind: str = Field(default="continuous", pattern=r"^(continuous|gap)$")
+    kind: Literal["continuous", "gap"] = "continuous"
     #: Fixed label length. For die-cut media pin it to the label size (e.g. 30 for
     #: 15x30); ``"auto"`` sizes each label to its content and only suits continuous tape.
     length_mm: float | Literal["auto"] = "auto"

@@ -88,7 +88,7 @@ class PrintWorker:
         self.retry_interval_s = retry_interval_s
         #: job_id -> last stall time, so a napping printer is retried, not busy-looped.
         self._stalled: dict[str, float] = {}
-        #: Latest device serial learned from the BLE feedback channel, if any.
+        #: Latest device serial reported by the printer, on either transport.
         self._device_serial: str | None = None
         self.coalescer = Coalescer(
             max_wait_s=config.strip.max_wait_s,
@@ -115,7 +115,7 @@ class PrintWorker:
         whatever a job claims -- a producer cannot know what tape was last loaded."""
         return TapeSpec(
             width_mm=self.config.tape.width_mm,
-            kind=self.config.tape.kind,  # type: ignore[arg-type]
+            kind=self.config.tape.kind,
             length_mm=self.config.tape.length_mm,
         )
 
@@ -330,10 +330,14 @@ class PrintWorker:
         return self._Send(ok=False, wrote=False, error=last or "no attempt made")
 
     def _capture_feedback(self, printer: PhomemoD30) -> None:
-        """Read the device feedback channel (BLE notify), if present, after a print."""
+        """Record what the printer told us during this print.
+
+        Every transport carries feedback -- SPP answers queries and pushes media-state
+        changes just as BLE does -- so this is unconditional. A transport that somehow
+        has no ``feedback`` is a programming error worth surfacing, not a case to
+        silently skip; the previous ``None`` guard would have hidden exactly that.
+        """
         fb = printer.feedback
-        if fb is None:
-            return
         if fb.serial:
             self._device_serial = fb.serial
         log.info("device feedback: %s", fb.summary())
