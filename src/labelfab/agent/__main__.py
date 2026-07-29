@@ -41,6 +41,16 @@ def make_printer_factory(config: Config) -> Callable[[], PhomemoD30]:
             transport = FakeTransport()
         elif kind == "serial":
             transport = SerialTransport(port=config.device.serial_port)
+        elif kind == "ble":
+            from labelfab.device import BleTransport
+
+            if not config.device.mac:
+                raise SystemExit("labelfab-agent: device.mac is required for the ble transport")
+            transport = BleTransport(
+                mac=config.device.mac,
+                write_uuid=config.device.ble_write_uuid,
+                adapter=config.device.ble_adapter or None,
+            )
         else:
             if not config.device.mac:
                 raise SystemExit("labelfab-agent: device.mac is required for the afbluetooth transport")

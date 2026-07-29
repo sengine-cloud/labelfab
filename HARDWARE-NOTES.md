@@ -117,7 +117,21 @@ sdptool browse <MAC>    # look for a Serial Port Profile record + channel
 `device/ble.py` with `bleak` — `crabdancing/phomemo-d30` (Rust) is the reference. The
 `Transport` protocol makes that additive rather than a rewrite. Budget half a day.
 
-Record: PIN required? `trust` needed for unattended reconnect? RFCOMM channel?
+**RESULT (unit AA:FD:FD:6B:9F:5F):** BLE-only. `sdptool browse` is empty; pairing
+resolves a GATT profile — vendor service `0xff00` with characteristics:
+
+| Char | Properties | Role |
+|---|---|---|
+| `0000ff02` | `write-without-response`, `write` | **print data** (the ESC/POS bytes) |
+| `0000ff01` | `read` | — |
+| `0000ff03` | `notify` | — |
+
+So `device.transport = "ble"`, `device.ble_write_uuid = 0000ff02-...`. Confirmed by
+printing a self-test over `ff02` (default MTU 23, so writes chunk to 20 bytes — fine,
+just more packets; negotiating a larger MTU would speed long strips). `trust` is
+needed for unattended reconnect; the printer must be **awake and not held by another
+BlueZ connection** (a `bluetoothctl` session holding it stops it advertising, so
+`bleak` can't find it — `bluetoothctl disconnect <MAC>` first).
 
 ### 1. Can we open a socket unprivileged?
 
