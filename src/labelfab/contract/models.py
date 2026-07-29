@@ -240,6 +240,8 @@ class PrinterStatus(Base):
     #: so the agent can never observe them and must not claim to.
     state: Literal["idle", "printing", "disconnected", "error"]
     model: str | None = None
+    #: Device serial, when the transport has a read channel to report it (BLE).
+    serial: str | None = None
     tape_width_mm: float | None = None
     pending_labels: int = 0
     error: str | None = None

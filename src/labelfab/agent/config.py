@@ -18,6 +18,7 @@ precisely so that a first misprint is an edit here rather than a rebuild.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, Field
 from pydantic_settings import (
@@ -85,8 +86,20 @@ class DeviceSection(BaseModel):
 
 
 class TapeSection(BaseModel):
+    """The media physically loaded in the printer.
+
+    This is authoritative: the agent knows what tape is in the machine, so it applies
+    these to every job's geometry rather than trusting a producer that cannot know.
+    Swap the tape, edit this section, done.
+    """
+
     width_mm: float = Field(default=15.0, ge=6, le=15)
+    #: ``gap`` = die-cut labels (the firmware aligns to the die gap, which forces
+    #: discrete mode -- one frame per label, never a multi-label strip across gaps).
     kind: str = Field(default="continuous", pattern=r"^(continuous|gap)$")
+    #: Fixed label length. For die-cut media pin it to the label size (e.g. 30 for
+    #: 15x30); ``"auto"`` sizes each label to its content and only suits continuous tape.
+    length_mm: float | Literal["auto"] = "auto"
     #: Left offset when a narrow head prints onto wider, edge-guided tape. Answered
     #: by the alignment self-test on day one.
     offset_px: int = 0

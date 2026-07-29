@@ -75,6 +75,14 @@ class PhomemoD30:
     def is_connected(self) -> bool:
         return self.transport.is_open and self._initialised
 
+    @property
+    def feedback(self):
+        """Device feedback if the transport has a read channel (BLE), else ``None``.
+
+        SPP is write-only, so this is ``None`` there; over BLE it exposes the notify
+        channel's accumulated ACKs and status fields (serial, telemetry)."""
+        return getattr(self.transport, "feedback", None)
+
     def connect(self) -> None:
         """Open the transport and run the captured session-setup sequence."""
         self.transport.open()
