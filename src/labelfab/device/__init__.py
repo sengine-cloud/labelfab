@@ -2,6 +2,7 @@ from labelfab.device.ble import DEFAULT_NOTIFY_UUID, DEFAULT_WRITE_UUID, BleTran
 from labelfab.device.d30 import MODEL, D30Config, PhomemoD30
 from labelfab.device.decode import DecodeError, Frame, decode, decode_frames, find_frames
 from labelfab.device.errors import (
+    D30ConfigError,
     D30ConnectError,
     D30Error,
     D30GeometryError,
@@ -64,6 +65,7 @@ __all__ = [
     "Capabilities",
     "Command",
     "D30Config",
+    "D30ConfigError",
     "D30ConnectError",
     "D30Error",
     "D30GeometryError",
