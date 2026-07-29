@@ -25,7 +25,6 @@ depends:
   - libc6
   - bluez
   - dbus
-  - libbluetooth3
 recommends:
   - libzbar0 # only needed for `labelfab probe --verify-scan`
 

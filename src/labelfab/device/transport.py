@@ -23,9 +23,11 @@ from __future__ import annotations
 
 import errno
 import socket
+import sys
 import threading
 from typing import Protocol, runtime_checkable
 
+from labelfab.device import _rfcomm
 from labelfab.device.errors import D30ConnectError, D30WriteTimeout
 from labelfab.device.feedback import DeviceFeedback
 
@@ -42,11 +44,6 @@ _CONNECTION_ERRNOS = frozenset(
         errno.EBADF,
     }
 )
-
-
-#: "afbluetooth" on Linux where the socket family is present, "ble" elsewhere (e.g.
-#: python-build-standalone environments that lack libbluetooth-dev).
-DEFAULT_TRANSPORT = "afbluetooth" if hasattr(socket, "AF_BLUETOOTH") else "ble"
 
 
 @runtime_checkable
@@ -83,7 +80,12 @@ def _wrap_oserror(exc: OSError, what: str) -> Exception:
 
 
 class AFBluetoothTransport:
-    """RFCOMM over ``socket.AF_BLUETOOTH``.
+    """RFCOMM over an ``AF_BLUETOOTH`` socket.
+
+    Addressing goes through :mod:`labelfab.device._rfcomm` rather than
+    ``sock.connect((mac, channel))`` so this works on interpreters built without the
+    BlueZ headers -- notably the relocatable CPython the ``.deb`` ships. Nothing else
+    in the class is affected: past connect, an RFCOMM socket is an ordinary stream.
 
     Note for anyone hardening the systemd unit: ``RestrictAddressFamilies=`` must
     include ``AF_BLUETOOTH`` or this fails at ``socket()`` with ``EAFNOSUPPORT``
@@ -118,20 +120,27 @@ class AFBluetoothTransport:
     def open(self) -> None:
         if self._sock is not None:
             return
-        if not hasattr(socket, "AF_BLUETOOTH"):  # pragma: no cover - non-Linux
+        if sys.platform != "linux":  # pragma: no cover - non-Linux
             raise D30ConnectError(
-                "this platform has no AF_BLUETOOTH; use transport 'serial' with rfcomm bind"
+                f"RFCOMM sockets are Linux-only (this is {sys.platform}); "
+                f"use transport 'serial' with rfcomm bind"
             )
         try:
-            sock = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_STREAM, socket.BTPROTO_RFCOMM)
+            sock = _rfcomm.socket_rfcomm()
         except OSError as exc:
-            raise D30ConnectError(
-                f"could not create an RFCOMM socket: {exc}. If running under systemd, "
-                f"check that RestrictAddressFamilies includes AF_BLUETOOTH."
-            ) from exc
+            if exc.errno == errno.EAFNOSUPPORT:
+                # Two very different causes, one errno: no bluetooth in the kernel, or
+                # systemd filtering the family out from under a service that has it.
+                hint = (
+                    "the kernel has no Bluetooth support (is the bluetooth module "
+                    "loaded?), or RestrictAddressFamilies is filtering AF_BLUETOOTH "
+                    "out of this unit"
+                )
+            else:
+                hint = "is the bluetooth stack up?"
+            raise D30ConnectError(f"could not create an RFCOMM socket: {exc}. {hint}.") from exc
         try:
-            sock.settimeout(self.connect_timeout_s)
-            sock.connect((self.mac, self.channel))
+            _rfcomm.connect(sock, self.mac, self.channel, self.connect_timeout_s)
             sock.settimeout(self.write_timeout_s)
         except OSError as exc:
             sock.close()

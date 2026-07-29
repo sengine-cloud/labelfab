@@ -28,8 +28,6 @@ from pydantic_settings import (
     TomlConfigSettingsSource,
 )
 
-from labelfab.device.transport import DEFAULT_TRANSPORT
-
 #: Where the packaged config lives; overridable for tests and the dir-only mode.
 DEFAULT_CONFIG_PATH = Path("/etc/labelfab/agent.toml")
 
@@ -68,7 +66,7 @@ class MqttSection(BaseModel):
 
 class DeviceSection(BaseModel):
     #: afbluetooth = Classic SPP (RFCOMM); ble = BLE/GATT for units with no SPP record.
-    transport: str = Field(default=DEFAULT_TRANSPORT, pattern=r"^(afbluetooth|ble|serial|fake)$")
+    transport: str = Field(default="afbluetooth", pattern=r"^(afbluetooth|ble|serial|fake)$")
     mac: str = ""
     channel: int = 1
     serial_port: str = "/dev/rfcomm0"

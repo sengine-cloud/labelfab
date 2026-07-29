@@ -318,9 +318,8 @@ def build_parser() -> argparse.ArgumentParser:
     dec.set_defaults(func=cmd_decode)
 
     probe = sub.add_parser("probe", help="hardware bring-up patterns")
-    from labelfab.device import DEFAULT_TRANSPORT
     probe.add_argument(
-        "--transport", default=DEFAULT_TRANSPORT, choices=["afbluetooth", "ble", "serial", "fake"]
+        "--transport", default="afbluetooth", choices=["afbluetooth", "ble", "serial", "fake"]
     )
     probe.add_argument("--mac", help="printer Bluetooth address")
     probe.add_argument("--channel", type=int, default=1, help="RFCOMM channel (afbluetooth)")
