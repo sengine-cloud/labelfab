@@ -15,7 +15,18 @@ if getent group bluetooth >/dev/null 2>&1; then
 fi
 
 chown labelfab:labelfab /var/lib/labelfab
+
+# The service runs as User=labelfab, so it has to be able to read its own config.
+# chmod 750 alone left this root:root, which means the service user could not even
+# traverse the directory -- `systemctl start` died with PermissionError on
+# /etc/labelfab/agent.toml on any fresh install. Root-owned and group-readable: the
+# agent can read, only root can write.
+chown root:labelfab /etc/labelfab
 chmod 750 /etc/labelfab
+if [ -f /etc/labelfab/agent.toml ]; then
+    chown root:labelfab /etc/labelfab/agent.toml
+    chmod 640 /etc/labelfab/agent.toml
+fi
 
 if [ -d /run/systemd/system ]; then
     systemctl daemon-reload || true
