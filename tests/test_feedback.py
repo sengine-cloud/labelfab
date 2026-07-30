@@ -175,3 +175,55 @@ def test_leading_garbage_is_resynced():
     p = StatusParser()
     frames = p.feed(bytes.fromhex("ffff") + bytes.fromhex("1a0458"))
     assert [f.name for f in frames] == ["battery"]
+
+
+def test_voltage_decodes_to_volts():
+    """``0x2F`` is big-endian in 10mV units -- observed 4.16/4.17V on a charging unit."""
+    p = StatusParser()
+    (frame,) = p.feed(bytes.fromhex("1a2f01a1"))
+    assert frame.name == "voltage_v"
+    assert frame.value == 4.17
+    assert not p.unknown_tags
+
+
+def test_voltage_sensor_and_hardware_tags_are_no_longer_unknown():
+    """All three were seen live on fw 2.1.2 and used to cost a warning apiece."""
+    p = StatusParser()
+    frames = p.feed(bytes.fromhex("1a2f01a01a110100031a2d0200000000000000e600000000"))
+    assert [f.name for f in frames] == ["voltage_v", "hardware_version", "sensor_info"]
+    assert frames[1].value == "1.0.3"
+    assert not p.unknown_tags
+
+
+def test_fault_is_none_when_the_printer_has_said_nothing():
+    """Silence is not health, so it must not read as a fault either."""
+    fb = DeviceFeedback()
+    assert fb.fault() is None
+    assert fb.paper_ok is None
+
+
+def test_media_bit_clear_is_a_fault():
+    fb = DeviceFeedback()
+    fb.ingest(bytes.fromhex("1a0688"))  # bit0 clear
+    assert fb.paper_ok is False
+    assert "media not ready" in (fb.fault() or "")
+
+
+def test_media_fault_clears_when_the_stripe_goes_back_in():
+    """Observed live: 0x89 -> 0x88 on pulling the stripe, 0x89 again on replacing it."""
+    fb = DeviceFeedback()
+    fb.ingest(bytes.fromhex("1a0688"))
+    assert fb.fault() is not None
+    fb.ingest(bytes.fromhex("1a0689"))
+    assert fb.paper_ok is True
+    assert fb.fault() is None
+
+
+def test_material_error_and_cancellation_are_faults():
+    fb = DeviceFeedback()
+    fb.ingest(bytes.fromhex("1a3f02"))
+    assert "material error 0x02" in (fb.fault() or "")
+    fb2 = DeviceFeedback()
+    fb2.ingest(bytes.fromhex("1a0b01"))
+    assert fb2.print_cancelled
+    assert "cancelled" in (fb2.fault() or "")

@@ -33,6 +33,7 @@ def make_printer_factory(config: Config) -> Callable[[], PhomemoD30]:
     dcfg = D30Config(
         pace_factor=config.device.pace_factor,
         wake_dummy_feed=config.device.wake_dummy_feed,
+        density=config.device.density,
     )
 
     def factory() -> PhomemoD30:

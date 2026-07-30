@@ -88,6 +88,23 @@ class DeviceFeedback:
         return self.state.battery_pct
 
     @property
+    def voltage_v(self) -> float | None:
+        """Battery terminal voltage, or ``None`` if never queried."""
+        return self.state.voltage_v
+
+    @property
+    def material_error(self) -> int | None:
+        return self.state.material_error
+
+    @property
+    def print_cancelled(self) -> bool:
+        return self.state.print_cancelled
+
+    def fault(self) -> str | None:
+        """What the printer is complaining about, or ``None``. See DeviceState.fault."""
+        return self.state.fault()
+
+    @property
     def paper_ok(self) -> bool | None:
         """``None`` means the printer has not reported -- not the same as OK.
 

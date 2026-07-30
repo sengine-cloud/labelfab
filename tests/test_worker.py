@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import pytest
 from conftest import make_job
 
 from labelfab.device import INIT_PACKETS, print_preamble
+from labelfab.device.escpos import GS_V0
 
 
 def _first_body_byte() -> int:
@@ -157,3 +159,111 @@ def test_a_transient_connect_failure_still_gets_every_attempt(harness):
     attempts = _counting_factory(h, D30ConnectError("printer is asleep"))
     h.submit(make_job("j", n_labels=1, flush=True))
     assert len(attempts) == h.worker.max_attempts
+
+
+def _reporting_factory(harness, *frames: str, media: str = "1a0689"):
+    """A printer that volunteers real status frames on connect, as the D30 does."""
+    from labelfab.device import FakeTransport, PhomemoD30
+    from labelfab.device.d30 import D30Config
+
+    class _Reporting(FakeTransport):
+        def open(self) -> None:
+            super().open()
+            self.inject(bytes.fromhex("1a08" + b"Q223P4C31420105".hex()))
+            self.inject(bytes.fromhex("1a07020102"))
+            self.inject(bytes.fromhex("1a0464"))
+            self.inject(bytes.fromhex("1a2f01a1"))
+            self.inject(bytes.fromhex(media))
+            for extra in frames:
+                self.inject(bytes.fromhex(extra))
+
+    def factory() -> PhomemoD30:
+        transport = _Reporting(fail_after_bytes=harness.fail_after_bytes)
+        harness.transports.append(transport)
+        return PhomemoD30(transport, D30Config(pace_factor=0.0), sleep=lambda _s: None)
+
+    harness.worker.printer_factory = factory
+
+
+def test_status_carries_what_the_printer_reported(harness):
+    """InvenTree should learn firmware/battery/voltage/media, not just idle-vs-printing."""
+    h = harness()
+    _reporting_factory(h)
+    h.submit(make_job("j", n_labels=1, flush=True))
+
+    status = h.publisher.statuses[-1]
+    assert status.state == "idle"
+    assert status.serial == "Q223P4C31420105"
+    assert status.firmware == "2.1.2"
+    assert status.battery_pct == 100
+    assert status.voltage_v == 4.17
+    assert status.media_ok is True
+    assert status.error is None
+
+
+def test_a_media_fault_publishes_error_not_idle(harness):
+    """A printed batch with the media bit clear must not settle as healthy."""
+    h = harness()
+    _reporting_factory(h, media="1a0688")  # bit0 clear
+    h.submit(make_job("j", n_labels=1, flush=True))
+
+    status = h.publisher.statuses[-1]
+    assert status.state == "error"
+    assert status.media_ok is False
+    assert "media not ready" in (status.error or "")
+
+
+def test_a_fault_clears_on_the_next_good_batch(harness):
+    """Otherwise a transient media error latches and the printer looks broken forever."""
+    h = harness()
+    _reporting_factory(h, media="1a0688")
+    h.submit(make_job("a", n_labels=1, flush=True))
+    assert h.publisher.statuses[-1].state == "error"
+
+    _reporting_factory(h, media="1a0689")
+    h.submit(make_job("b", idempotency_key="b", n_labels=1, flush=True))
+    settled = h.publisher.statuses[-1]
+    assert settled.state == "idle"
+    assert settled.error is None
+    assert settled.media_ok is True
+
+
+def test_a_fault_is_captured_even_when_the_print_fails(harness):
+    """The fault is usually *why* it failed, so closing without reading it loses it."""
+    h = harness()
+    h.fail_after_bytes = 40  # die mid-frame
+    _reporting_factory(h, media="1a0688")
+    h.submit(make_job("j", n_labels=1, flush=True))
+
+    status = h.publisher.statuses[-1]
+    assert status.state == "error"
+    assert "media not ready" in (status.error or "")
+
+
+def test_render_is_capped_at_the_print_head(harness):
+    """15mm tape with a 96-dot head must not render 120px: the printer refuses it.
+
+    Verified on hardware -- a 120px raster came back print_cancelled (0x0B) and printed
+    nothing, while the same label at 96px printed. device.raster_width_px was declared
+    and used nowhere, so the shipped 15mm default cancelled every job.
+    """
+    from labelfab.contract import PX_PER_MM
+
+    h = harness()
+    h.config.tape.width_mm = 15.0
+    h.config.device.raster_width_px = 96
+    assert h.worker._loaded_tape().width_mm == pytest.approx(96 / PX_PER_MM)
+
+    h.submit(make_job("j", n_labels=1, flush=True))
+    body = bytes(h.last_transport.buf)
+    # GS v 0 then xL xH: bytes per line must be the head's 12, not the tape's 15.
+    idx = body.index(GS_V0) + len(GS_V0)
+    assert body[idx] == 12, f"raster is {body[idx]} bytes/line, head is 12"
+
+
+def test_narrower_tape_than_the_head_is_left_alone(harness):
+    """12mm head, 6mm tape: cap must not widen anything."""
+    h = harness()
+    h.config.tape.width_mm = 6.0
+    h.config.device.raster_width_px = 96
+    assert h.worker._loaded_tape().width_mm == 6.0
