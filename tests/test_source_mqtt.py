@@ -185,6 +185,41 @@ def test_the_will_is_re_armed_so_it_does_not_describe_startup_forever(source):
     assert will["device_seen_at"] is not None
 
 
+def test_a_stale_will_is_corrected_by_the_restart_that_follows_it(tmp_path, monkeypatch):
+    """The will is frozen at connect, so a fault learned mid-session cannot reach it: if
+    the agent is killed after that fault, the broker publishes the older, healthier
+    reading over the newer one. Nothing can change what the broker holds for a live
+    session -- what stops it mattering is that the next process seeds from the spool,
+    which does have the fault, and republishes on connect. The unit is Restart=always
+    with RestartSec=5, so that correction is seconds behind the will."""
+    import paho.mqtt.client as mqtt
+
+    monkeypatch.setattr(mqtt, "Client", FakeClient)
+    config = make_config()
+    config.mqtt.host = "broker.invalid"
+
+    spool = Spool(tmp_path / "spool.db")
+    spool.save_device_snapshot(KNOWN)
+    healthy = MqttSource(config, spool, lambda _j: None)
+    healthy.start()
+    assert json.loads(healthy.client.will[1])["media_ok"] is True  # what a crash will say
+
+    # Mid-session: a print finds the tape gone. The topic is correct; the will is not.
+    faulted = KNOWN.model_copy(update={"media_ok": False, "fault": "media not ready", "seen_at": 5000.0})
+    spool.save_device_snapshot(faulted)
+    healthy.publish_status(faulted.to_status("d30-workshop", state="error"))
+    spool.close()
+
+    # SIGKILL: the broker publishes the stale will, then systemd brings the agent back.
+    restarted = MqttSource(config, Spool(tmp_path / "spool.db"), lambda _j: None)
+    _connect(restarted)
+
+    corrected = restarted.client.statuses[-1]
+    assert corrected["media_ok"] is False
+    assert corrected["error"] == "media not ready"
+    assert corrected["device_seen_at"] > json.loads(healthy.client.will[1])["device_seen_at"]
+
+
 def test_shutdown_says_disconnected_without_forgetting(source):
     src = source(KNOWN)
     src.stop()
