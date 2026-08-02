@@ -93,6 +93,11 @@ class Agent:
         signal.signal(signal.SIGINT, self.stop)
         signal.signal(signal.SIGTERM, self.stop)
 
+        # Before the source starts, so whatever these two learn is what the first
+        # retained status carries: the source republishes the last thing published,
+        # and nothing has been published yet.
+        if self.config.device.probe_on_start:
+            self.worker.probe_device()
         self.worker.recover()
         if self.dir_source:
             self.dir_source.poll()

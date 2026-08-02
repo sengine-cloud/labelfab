@@ -7,6 +7,7 @@ so a change here is a deliberate, visible cross-repo contract change.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -260,6 +261,16 @@ class PrinterStatus(Base):
     tape_width_mm: float | None = None
     pending_labels: int = 0
     error: str | None = None
+    #: When the device fields above were last heard from the printer; ``None`` if it
+    #: has never said anything. The D30 is only reachable while it is being printed to,
+    #: so most reads of this topic are reads of *remembered* truth: the agent stores
+    #: what it last heard and republishes it across restarts and broker reconnects
+    #: rather than going quiet. This is how a consumer tells the two apart.
+    #:
+    #: An absolute instant rather than an age because this message is *retained*: an
+    #: age is computed at publish time and then sits on the broker getting wronger,
+    #: while a timestamp stays true no matter how long nobody republishes it.
+    device_seen_at: datetime | None = None
 
 
 def job_schema() -> dict[str, Any]:

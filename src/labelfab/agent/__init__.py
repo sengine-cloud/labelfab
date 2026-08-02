@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from labelfab.agent.coalescer import Batch, Coalescer, PendingLabel
 from labelfab.agent.config import Config, load
+from labelfab.agent.device_state import DeviceSnapshot
 from labelfab.agent.publisher import NullPublisher, Publisher, RecordingPublisher
 from labelfab.agent.spool import InsertResult, Outcome, Spool
 from labelfab.agent.worker import PrintWorker
@@ -19,6 +20,7 @@ __all__ = [
     "Batch",
     "Coalescer",
     "Config",
+    "DeviceSnapshot",
     "InsertResult",
     "NullPublisher",
     "Outcome",

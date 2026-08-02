@@ -46,6 +46,16 @@ def test_density_defaults_to_light_and_reaches_the_driver():
     assert printer.config.density == 1
 
 
+def test_the_startup_probe_is_on_and_can_be_turned_off(tmp_path):
+    """On by default because it cannot wake a sleeping printer, so the only cost of a
+    miss is one connect timeout. The knob exists for hosts where that is in the way."""
+    assert Config().device.probe_on_start is True
+
+    toml = tmp_path / "agent.toml"
+    toml.write_text("[device]\nprobe_on_start = false\n")
+    assert load(toml).device.probe_on_start is False
+
+
 def test_an_unknown_density_is_rejected_at_load():
     import pytest
     from pydantic import ValidationError

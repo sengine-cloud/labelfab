@@ -82,9 +82,20 @@ Protocol constants, tape geometry and the day-one bring-up checklist live in
 [`HARDWARE-NOTES.md`](HARDWARE-NOTES.md). Read it before changing anything in
 `labelfab.device`.
 
-**There is no read channel.** The D30 never reports back, so "printed" means "the bytes
-were accepted and we waited the physical print duration". Out-of-tape, jams and low
-battery are undetectable.
+**There is a read channel**, contrary to the received wisdom: the D30 answers queries on
+both transports and pushes media-state changes unsolicited. The retained status topic
+carries what it said — serial, firmware, battery percentage and terminal voltage, and
+whether media is loaded — not just whether the agent is up.
+
+It says so *and when it said so*. The printer is only reachable while it is being printed
+to (it auto-powers-off, and a held-open socket just relocates that), so the agent
+remembers the last thing it heard and republishes it, stamped with `device_seen_at`.
+A consumer can then tell live truth from remembered truth instead of guessing, and no
+printer is woken to keep a status page tidy. `device.probe_on_start` surveys the printer
+once at startup when it happens to be awake.
+
+Jams remain undetectable — the media bit distinguishes loaded from not, and nothing
+observed so far distinguishes a jam from either.
 
 ## License
 

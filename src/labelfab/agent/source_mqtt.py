@@ -55,10 +55,16 @@ class MqttSource:
         if config.mqtt.username:
             self.client.username_pw_set(config.mqtt.username, config.mqtt.password)
 
-        # Last will: if the agent drops, the retained status flips to disconnected so
-        # a producer sees the printer is unreachable before it ever clicks print.
-        will = PrinterStatus(printer_id=config.agent.printer_id, state="disconnected")
-        self.client.will_set(config.topic("status"), will.model_dump_json(), qos=1, retain=True)
+        # What the retained topic currently says. Seeded from the spool so a fresh
+        # process starts out holding the previous one's device truth, then updated by
+        # every retained publish -- which is what lets a reconnect restore the topic
+        # instead of flattening it.
+        snapshot = spool.device_snapshot()
+        self._last_status = snapshot.to_status(
+            config.agent.printer_id,
+            state=snapshot.settled_state(),
+            tape_width_mm=config.tape.width_mm,
+        )
 
         self.client.on_connect = self._on_connect
         self.client.on_message = self._on_message
@@ -66,17 +72,32 @@ class MqttSource:
     # -- lifecycle ---------------------------------------------------------- #
 
     def start(self) -> None:
+        # The will is set here rather than in __init__ because paho cannot change it on
+        # a live connection, so this is the last moment it can be made current -- after
+        # the startup probe and crash recovery have had their say.
+        self.client.will_set(
+            self.config.topic("status"), self._disconnected().model_dump_json(), qos=1, retain=True
+        )
         self.client.connect(self.config.mqtt.host, self.config.mqtt.port, self.config.mqtt.keepalive_s)
         self.client.loop_start()
 
     def stop(self) -> None:
         try:
-            self.publish_status(
-                PrinterStatus(printer_id=self.config.agent.printer_id, state="disconnected")
-            )
+            self.publish_status(self._disconnected())
         finally:
             self.client.loop_stop()
             self.client.disconnect()
+
+    def _disconnected(self) -> PrinterStatus:
+        """Last-known truth with the link marked down.
+
+        Backs both the will and the shutdown notice: if the agent drops, a producer
+        must see that the printer is unreachable before it ever clicks print. Losing
+        the link is news about reachability, though, not grounds for forgetting the
+        serial, the firmware and the media state -- ``device_seen_at`` rides along to
+        say how old they are.
+        """
+        return self._last_status.model_copy(update={"state": "disconnected", "pending_labels": 0})
 
     # -- Publisher protocol ------------------------------------------------- #
 
@@ -84,6 +105,12 @@ class MqttSource:
         self.client.publish(self.config.topic("results"), result.model_dump_json(), qos=1)
 
     def publish_status(self, status: PrinterStatus, *, retain: bool = True) -> None:
+        if retain:
+            # Recorded before the publish and regardless of whether it succeeds: the
+            # startup probe and crash recovery both publish before the client is
+            # connected, so those go nowhere and the connect below is what lands them.
+            # A non-retained publish is not what the topic holds, so it is not recorded.
+            self._last_status = status
         self.client.publish(self.config.topic("status"), status.model_dump_json(), qos=1, retain=retain)
 
     def publish_progress(self, job_id: str, printed: int, total: int) -> None:
@@ -98,13 +125,14 @@ class MqttSource:
             return
         client.subscribe(self.config.topic("jobs"), qos=self.config.mqtt.qos)
         client.subscribe(self.config.topic("cmd"), qos=1)
-        self.publish_status(
-            PrinterStatus(
-                printer_id=self.config.agent.printer_id,
-                state="idle",
-                tape_width_mm=self.config.tape.width_mm,
-            )
-        )
+        # Republish what the topic already said, rather than a freshly synthesised
+        # blank. This fires on every reconnect, not just the first connect, and paho
+        # reconnects silently -- the Istio route for the broker caps at a 24h timeout
+        # and flaps besides, so it runs several times a day. Publishing a hardcoded
+        # bare status here was not merely uninformative, it was lossy: it overwrote a
+        # retained message that was correct a moment earlier, and the printer is asleep
+        # and cannot be asked again.
+        self.publish_status(self._last_status)
 
     def _on_message(self, client, userdata, msg) -> None:
         if msg.topic.endswith("/cmd"):

@@ -30,7 +30,6 @@ from labelfab.contract import (
     PX_PER_MM,
     JobResult,
     LabelResult,
-    PrinterStatus,
     PrintJob,
     TapeSpec,
 )
@@ -43,6 +42,10 @@ log = logging.getLogger("labelfab.worker")
 
 #: Backoff between reconnect attempts within one send, in seconds.
 _BACKOFF_S = (1.0, 3.0, 9.0)
+
+#: How long the startup probe waits for the printer's replies to arrive on the
+#: transport's reader thread before reading them.
+_PROBE_SETTLE_S = 1.0
 
 
 @dataclass
@@ -95,14 +98,10 @@ class PrintWorker:
         self.retry_interval_s = retry_interval_s
         #: job_id -> last stall time, so a napping printer is retried, not busy-looped.
         self._stalled: dict[str, float] = {}
-        #: Latest device serial reported by the printer, on either transport.
-        self._device_serial: str | None = None
-        self._device_firmware: str | None = None
-        self._device_battery_pct: int | None = None
-        self._device_voltage_v: float | None = None
-        self._device_media_ok: bool | None = None
-        #: Last fault the printer reported, or None. Drives the "error" status state.
-        self._device_fault: str | None = None
+        #: What the printer last said about itself. Seeded from the spool, so a restart
+        #: starts out knowing what the previous process learned instead of publishing a
+        #: row of nulls until something happens to print.
+        self._device = spool.device_snapshot()
         self.coalescer = Coalescer(
             max_wait_s=config.strip.max_wait_s,
             max_length_mm=config.strip.max_length_mm,
@@ -252,6 +251,48 @@ class PrintWorker:
             except KeyError:
                 pass
 
+    def probe_device(self) -> bool:
+        """Ask the printer what it is, if it happens to be awake. Returns whether it answered.
+
+        This is not a wake attempt and cannot be one: a slept D30 has powered its radio
+        down (``AUTO_POWER_TIME``, HARDWARE-NOTES §7) and only the button brings it
+        back, so this either finds it already awake and learns the truth, or fails
+        inside the transport's connect timeout and leaves the remembered snapshot
+        exactly as it was.
+
+        Deliberately called from the run loop at startup, and only there. Not from the
+        MQTT ``on_connect`` callback: that is paho's network thread, so probing from it
+        would touch the printer concurrently with a print -- the one thing the
+        single-threaded loop exists to make impossible -- and it fires on every broker
+        reconnect, which happens several times a day and says nothing about the printer.
+
+        One attempt, no backoff. The retry ladder in ``_send`` exists to get a *job*
+        onto tape; there is no job here and nothing is lost by giving up immediately.
+        """
+        printer = self.printer_factory()
+        try:
+            printer.connect()
+            printer.refresh_telemetry()
+        except D30Error as exc:
+            printer.close()
+            log.info("startup probe: printer did not answer (%s); keeping the stored status", exc)
+            return False
+        except Exception:  # a status nicety must never be what stops the agent starting
+            printer.close()
+            log.exception("startup probe failed; keeping the stored status")
+            return False
+        # Replies land asynchronously on the transport's reader thread, and unlike the
+        # print path there is no print duration to cover the wait. Settling short is
+        # safe by construction: an empty merge keeps every stored field and does not
+        # advance seen_at, so the worst case is learning nothing, never losing anything.
+        self.sleep(_PROBE_SETTLE_S)
+        self._capture_feedback(printer)
+        printer.close()
+        # Publish it: the MQTT source has not connected yet, so this does not reach the
+        # broker -- it updates what the source will republish the moment it does.
+        self._publish_status(self._settled_state())
+        return True
+
     # -- flushing and printing ---------------------------------------------- #
 
     def _flush(self) -> None:
@@ -375,26 +416,17 @@ class PrintWorker:
         changes just as BLE does -- so this is unconditional. A transport that somehow
         has no ``feedback`` is a programming error worth surfacing, not a case to
         silently skip; the previous ``None`` guard would have hidden exactly that.
+
+        Persisted immediately. The printer is only reachable while it is being printed
+        to, so this instant is the *only* chance to learn any of it, and dropping it on
+        process exit is what left the status topic full of nulls.
         """
         fb = printer.feedback
-        # Only overwrite what it actually reported this time: a connection that
-        # answered nothing must not blank out a serial we already know. The fault is
-        # the exception -- it is recomputed every time, so a cleared media error
-        # clears the status rather than latching an error forever.
-        if fb.serial:
-            self._device_serial = fb.serial
-        if fb.firmware:
-            self._device_firmware = fb.firmware
-        if fb.battery_pct is not None:
-            self._device_battery_pct = fb.battery_pct
-        if fb.voltage_v is not None:
-            self._device_voltage_v = fb.voltage_v
-        if fb.paper_ok is not None:
-            self._device_media_ok = fb.paper_ok
-        self._device_fault = fb.fault()
+        self._device = self._device.merge(fb, now=self.clock())
+        self.spool.save_device_snapshot(self._device)
         log.info("device feedback: %s", fb.summary())
-        if self._device_fault:
-            log.warning("printer reports a fault: %s", self._device_fault)
+        if self._device.fault:
+            log.warning("printer reports a fault: %s", self._device.fault)
 
     # -- result accounting -------------------------------------------------- #
 
@@ -470,27 +502,15 @@ class PrintWorker:
     # -- status ------------------------------------------------------------- #
 
     def _settled_state(self) -> str:
-        """What to publish once a batch is done.
-
-        "idle" unless the printer is complaining. Kept explicit rather than folded into
-        ``_publish_status`` so "printing" and "disconnected" -- which are facts about
-        the link, not the media -- are never silently rewritten.
-        """
-        return "error" if self._device_fault else "idle"
+        """What to publish once a batch is done. See ``DeviceSnapshot.settled_state``."""
+        return self._device.settled_state()
 
     def _publish_status(self, state: str, *, pending: int = 0) -> None:
         self.publisher.publish_status(
-            PrinterStatus(
-                printer_id=self.config.agent.printer_id,
-                state=state,  # type: ignore[arg-type]
-                model=MODEL,
-                serial=self._device_serial,
-                firmware=self._device_firmware,
-                battery_pct=self._device_battery_pct,
-                voltage_v=self._device_voltage_v,
-                media_ok=self._device_media_ok,
+            self._device.to_status(
+                self.config.agent.printer_id,
+                state=state,
                 tape_width_mm=self.config.tape.width_mm,
                 pending_labels=pending,
-                error=self._device_fault,
             )
         )

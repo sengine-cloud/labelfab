@@ -228,6 +228,81 @@ def test_a_fault_clears_on_the_next_good_batch(harness):
     assert settled.media_ok is True
 
 
+def test_status_says_when_the_printer_was_last_heard_from(harness, clock):
+    h = harness()
+    _reporting_factory(h)
+    h.submit(make_job("j", n_labels=1, flush=True))
+
+    seen = h.publisher.statuses[-1].device_seen_at
+    assert seen is not None and seen.timestamp() == clock.now
+
+
+def test_device_truth_is_persisted_for_the_next_process(harness):
+    """Everything the printer says is said during a print. Not writing it down here is
+    what left the status topic full of nulls after a restart."""
+    h = harness()
+    _reporting_factory(h)
+    h.submit(make_job("j", n_labels=1, flush=True))
+
+    stored = h.spool.device_snapshot()
+    assert stored.serial == "Q223P4C31420105"
+    assert stored.firmware == "2.1.2"
+    assert stored.media_ok is True
+    assert stored.seen_at is not None
+
+
+def test_a_restarted_worker_does_not_start_blind(tmp_path, clock):
+    """A fresh process on the same spool publishes what the previous one learned —
+    including on the disconnected status it emits when the printer is asleep."""
+    from conftest import WorkerHarness
+
+    first = WorkerHarness(tmp_path, clock)
+    _reporting_factory(first)
+    first.submit(make_job("j", n_labels=1, flush=True))
+    first.spool.close()
+
+    restarted = WorkerHarness(tmp_path, clock)  # same spool.db, new worker
+    restarted.offline = True  # printer has since gone to sleep
+    restarted.submit(make_job("k", n_labels=1, flush=True))
+
+    status = restarted.publisher.statuses[-1]
+    assert status.state == "disconnected"
+    assert status.serial == "Q223P4C31420105"
+    assert status.media_ok is True
+    assert status.device_seen_at is not None
+
+
+def test_the_startup_probe_surveys_a_printer_that_is_awake(harness, clock):
+    h = harness()
+    _reporting_factory(h)
+
+    assert h.worker.probe_device() is True
+
+    status = h.publisher.statuses[-1]
+    assert status.state == "idle"
+    assert status.serial == "Q223P4C31420105"
+    assert status.device_seen_at is not None and status.device_seen_at.timestamp() == clock.now
+    assert h.frames == 0  # surveyed, not printed
+
+
+def test_a_sleeping_printer_leaves_the_stored_status_alone(tmp_path, clock):
+    """A slept D30 has its radio off and cannot be woken over Bluetooth, so the probe
+    is expected to miss. Missing must cost nothing beyond a connect timeout."""
+    from conftest import WorkerHarness
+
+    first = WorkerHarness(tmp_path, clock)
+    _reporting_factory(first)
+    first.submit(make_job("j", n_labels=1, flush=True))
+    first.spool.close()
+
+    restarted = WorkerHarness(tmp_path, clock)
+    restarted.offline = True
+
+    assert restarted.worker.probe_device() is False
+    assert restarted.spool.device_snapshot().serial == "Q223P4C31420105"
+    assert restarted.publisher.statuses == []  # nothing learned, nothing to say
+
+
 def test_a_fault_is_captured_even_when_the_print_fails(harness):
     """The fault is usually *why* it failed, so closing without reading it loses it."""
     h = harness()
