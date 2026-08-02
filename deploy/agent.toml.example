@@ -42,6 +42,10 @@ raster_width_px = 96         # 96 = 12mm head (verified); 120 = 15mm (day-1 hypo
 pace_factor = 1.2            # lower until a long strip garbles, then +50%
 density = 1                  # 1 light | 2 medium | 4 heavy; raise if codes misscan
 wake_dummy_feed = false
+# Survey the printer once at startup so the status topic carries live truth instead of
+# what was remembered from the last print. Cannot wake a sleeping unit, so a miss costs
+# one connect timeout and the stored status is published unchanged.
+probe_on_start = true
 
 [tape]
 width_mm = 15.0

@@ -95,6 +95,13 @@ class DeviceSection(BaseModel):
     #: Drop the socket between batches: the D30 auto-sleeps, so a held-open socket
     #: just relocates the failure. Reconnect-per-batch is cheaper to reason about.
     idle_disconnect: bool = True
+    #: Ask the printer what it is once at startup, so the status topic carries live
+    #: truth rather than remembered truth from the moment the agent comes up. This
+    #: cannot wake a sleeping unit -- it has powered its radio off and only the button
+    #: brings it back -- so the cost of a miss is one connect timeout, after which the
+    #: stored snapshot is published unchanged. On by default; turn it off if that
+    #: timeout is in the way of a fast start. Never runs on a broker reconnect.
+    probe_on_start: bool = True
 
     @field_validator("density")
     @classmethod

@@ -14,10 +14,16 @@ Two kinds of de-duplication live here and they are not the same thing:
   its cached result and prints nothing.
 * ``dedupe_key`` deduplicates individual *labels* across different jobs, so a "print
   bin A4" that fires twice an hour apart does not waste tape.
+
+One thing here is not about jobs at all: the last :class:`DeviceSnapshot`. It is stored
+alongside them because this file is already the agent's only durable place, and because
+the printer is only reachable during a print -- so the alternative to remembering what
+it said is waking it up to ask again.
 """
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 import time
 from collections.abc import Callable
@@ -25,7 +31,12 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
+from pydantic import ValidationError
+
+from labelfab.agent.device_state import DeviceSnapshot
 from labelfab.contract import JobResult, PrintJob
+
+log = logging.getLogger("labelfab.spool")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
@@ -50,6 +61,14 @@ CREATE TABLE IF NOT EXISTS printed_labels (
     label_index INTEGER NOT NULL,
     printed_at  REAL NOT NULL,
     PRIMARY KEY (job_id, label_index)
+);
+
+-- One row, holding the last DeviceSnapshot. The printer only talks while it is being
+-- printed to, so without this the agent starts every process knowing nothing about the
+-- hardware it drives until the next job happens to come along.
+CREATE TABLE IF NOT EXISTS device_state (
+    id      INTEGER PRIMARY KEY CHECK (id = 1),
+    payload TEXT NOT NULL
 );
 """
 
@@ -186,3 +205,34 @@ class Spool:
             "SELECT label_index FROM printed_labels WHERE job_id = ?", (job_id,)
         ).fetchall()
         return {r["label_index"] for r in rows}
+
+    # -- last-known device truth -------------------------------------------- #
+    #
+    # Written after every print, read once at startup. This is the only state here that
+    # is not about jobs, and it lives here because the alternative -- asking the printer
+    # on boot -- means waking a device whose whole operating model is "asleep until
+    # needed", every time the agent restarts.
+
+    def save_device_snapshot(self, snapshot: DeviceSnapshot) -> None:
+        self._db.execute(
+            "INSERT INTO device_state (id, payload) VALUES (1, ?) "
+            "ON CONFLICT(id) DO UPDATE SET payload = excluded.payload",
+            (snapshot.model_dump_json(),),
+        )
+
+    def device_snapshot(self) -> DeviceSnapshot:
+        """The last snapshot written, or an empty one.
+
+        Empty covers both "this agent has never printed" and "the stored row is no
+        longer readable". The second degrades rather than raising on purpose: an
+        unusable status field is a cosmetic problem, and taking the print agent down at
+        boot over one would be a much larger one.
+        """
+        row = self._db.execute("SELECT payload FROM device_state WHERE id = 1").fetchone()
+        if row is None:
+            return DeviceSnapshot()
+        try:
+            return DeviceSnapshot.model_validate_json(row["payload"])
+        except ValidationError:
+            log.warning("stored device snapshot is unreadable; starting without one")
+            return DeviceSnapshot()
