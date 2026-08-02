@@ -88,7 +88,7 @@ class Agent:
         self.queue.put("\x00stop")  # break the loop out of its blocking get
 
     def run(self) -> int:
-        from labelfab.agent.source_mqtt import FLUSH_COMMAND
+        from labelfab.agent.source_mqtt import FLUSH_COMMAND, PROBE_COMMAND
 
         signal.signal(signal.SIGINT, self.stop)
         signal.signal(signal.SIGTERM, self.stop)
@@ -114,9 +114,11 @@ class Agent:
                 if self.dir_source:
                     self.dir_source.poll()
                 continue
-            if item in ("\x00stop", FLUSH_COMMAND):
+            if item in ("\x00stop", FLUSH_COMMAND, PROBE_COMMAND):
                 if item == FLUSH_COMMAND:
                     self.worker.flush()
+                elif item == PROBE_COMMAND:
+                    self.worker.probe_device()
                 continue
             try:
                 self.worker.submit(item)

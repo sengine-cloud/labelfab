@@ -303,6 +303,66 @@ def test_a_sleeping_printer_leaves_the_stored_status_alone(tmp_path, clock):
     assert restarted.publisher.statuses == []  # nothing learned, nothing to say
 
 
+def test_the_interval_probe_only_fires_once_the_reading_is_stale(harness, clock):
+    """Printing already refreshes the reading, so a busy printer must never be probed."""
+    h = harness()
+    h.config.device.probe_interval_s = 100.0
+    _reporting_factory(h)
+    h.submit(make_job("j", n_labels=1, flush=True))
+    probes = len(h.transports)
+
+    clock.advance(50)
+    h.worker.tick()
+    assert len(h.transports) == probes  # still fresh, nothing to ask about
+
+    clock.advance(60)  # now 110s since the printer last said anything
+    h.worker.tick()
+    assert len(h.transports) == probes + 1
+    assert h.publisher.statuses[-1].device_seen_at.timestamp() == clock.now
+
+
+def test_a_sleeping_printer_is_not_dialled_every_tick(harness, clock):
+    """A failed probe leaves seen_at alone by design, so the stale condition still
+    holds a second later. Without a separate attempt clock this would connect once per
+    tick, each attempt blocking the print loop for the connect timeout."""
+    h = harness()
+    h.config.device.probe_interval_s = 100.0
+    h.offline = True
+
+    clock.advance(200)
+    h.worker.tick()
+    assert len(h.transports) == 1  # one attempt
+
+    for _ in range(20):  # twenty ticks inside the interval
+        clock.advance(1)
+        h.worker.tick()
+    assert len(h.transports) == 1  # still one
+
+    clock.advance(100)
+    h.worker.tick()
+    assert len(h.transports) == 2  # the interval has passed, try again
+
+
+def test_a_missed_probe_does_not_announce_the_printer_disconnected(harness, clock):
+    """That is reserved for a printer that could not take a job. A background probe
+    finding the D30 asleep is the normal state of an idle printer, not news."""
+    h = harness()
+    h.config.device.probe_interval_s = 10.0
+    h.offline = True
+
+    clock.advance(100)
+    h.worker.tick()
+    assert h.publisher.statuses == []
+
+
+def test_the_interval_probe_is_off_by_default(harness, clock):
+    h = harness()
+    h.offline = True
+    clock.advance(10_000)
+    h.worker.tick()
+    assert h.transports == []
+
+
 def test_a_fault_is_captured_even_when_the_print_fails(harness):
     """The fault is usually *why* it failed, so closing without reading it loses it."""
     h = harness()
