@@ -409,6 +409,23 @@ be awake and not held by another BlueZ connection.
 > whether the answer is a retry loop, a wake sequence, or something else. Do not
 > paper over it with blind retries until it is understood.
 
+**Discoverability, measured 2026-08-02** (fw 2.1.2, `auto_power=0`, unit on mains).
+Answers part of the question above — how long it advertises — though not the pairing half:
+
+| | |
+|---|---|
+| Powered on | Answers **BR/EDR inquiry continuously**, not just for a window after wake. `Class: 0x00100680`, `Icon: printer`, name `D30`, RSSI −26 at bench distance |
+| Powered off | Gone from inquiry. A 6 s window returns zero hits, reproducibly |
+| `l2ping` | **No response, ever** — including while the unit was demonstrably up and RFCOMM connected 3.3 s later. Its stack does not implement L2CAP echo, so the usual liveness trick is unavailable |
+| Pairing | `Paired: no`. RFCOMM connects without bonding, so BlueZ holds it as a *temporary* device and expires it from `bluetoothctl devices` within about a minute of it going away |
+
+Two consequences for anyone building on this. Presence must be judged from an **RSSI
+update inside an active scan window** — the cached `devices` list is only self-clearing
+because the unit is unpaired, and pairing it would make that entry permanent and the
+check useless. And presence detection is not a cheap substitute for connecting: a 3–8 s
+inquiry window against a **5.2 s failed connect** is no saving, and the connect returns
+real device state when it succeeds while the scan returns only a boolean.
+
 ### 1. Can we open a socket unprivileged?
 
 ```bash
