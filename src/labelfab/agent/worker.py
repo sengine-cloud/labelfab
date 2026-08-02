@@ -293,11 +293,14 @@ class PrintWorker:
         inside the transport's connect timeout and leaves the remembered snapshot
         exactly as it was.
 
-        Deliberately called from the run loop at startup, and only there. Not from the
-        MQTT ``on_connect`` callback: that is paho's network thread, so probing from it
-        would touch the printer concurrently with a print -- the one thing the
-        single-threaded loop exists to make impossible -- and it fires on every broker
-        reconnect, which happens several times a day and says nothing about the printer.
+        Every caller is on the print loop, and that is the constraint rather than any
+        particular one of them: startup, the idle tick via ``probe_if_stale``, and the
+        ``probe`` command, which reaches here as a queue sentinel precisely so that it
+        does. Nothing may call this from paho's network thread -- an MQTT callback
+        probing the printer would touch it concurrently with a print, which is the one
+        thing the single-threaded loop exists to make impossible. That rules out
+        ``on_connect`` in particular, which would also fire on every broker reconnect,
+        several times a day, over a link that says nothing about the printer.
 
         One attempt, no backoff. The retry ladder in ``_send`` exists to get a *job*
         onto tape; there is no job here and nothing is lost by giving up immediately.
