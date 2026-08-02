@@ -108,6 +108,11 @@ class DeviceSection(BaseModel):
     #: age quietly. Off by default: on a unit that sleeps, every miss costs a connect
     #: timeout on the print loop, and that is a bad trade for a page nobody is reading.
     #: 900 (15 min) is a sensible starting point for a mains-powered printer.
+    #:
+    #: This is the agent's own timer and nothing on a consumer can reach it. InvenTree's
+    #: "Enable Machine Ping" governs how often *it* re-reads the retained topic -- a
+    #: cheap read that never touches Bluetooth -- so switching that off does not stop
+    #: this, and there is little point setting this below its 5-minute cadence.
     probe_interval_s: float = Field(default=0.0, ge=0)
 
     @field_validator("density")
