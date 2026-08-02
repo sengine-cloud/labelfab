@@ -102,6 +102,9 @@ class PrintWorker:
         #: starts out knowing what the previous process learned instead of publishing a
         #: row of nulls until something happens to print.
         self._device = spool.device_snapshot()
+        #: When a probe was last *attempted*, successful or not. Distinct from the
+        #: snapshot's seen_at, which only moves when the printer actually answered.
+        self._last_probe_attempt = 0.0
         self.coalescer = Coalescer(
             max_wait_s=config.strip.max_wait_s,
             max_length_mm=config.strip.max_length_mm,
@@ -215,6 +218,36 @@ class PrintWorker:
         if self.coalescer.idle_expired():
             self._flush()
         self.retry_queued()
+        self.probe_if_stale()
+
+    def probe_if_stale(self) -> None:
+        """Re-survey the printer when what we know about it has gone stale.
+
+        Two separate clocks, and conflating them is the trap. Staleness is measured on
+        ``seen_at`` -- what the printer last *told* us -- so a busy printer is never
+        probed at all, because printing keeps that fresh on its own. The rate limit is
+        measured on the last *attempt*, because a failed probe leaves ``seen_at``
+        untouched by design: without this the stale condition would still hold on the
+        next tick and a sleeping printer would be dialled once a second, each attempt
+        blocking the print loop for the connect timeout.
+
+        A miss is deliberately silent -- it does not publish ``disconnected``. That is
+        reserved for a printer that could not take a *job*, which is news a producer
+        needs. A background probe finding the D30 asleep is not news; it is the normal
+        state of a printer nobody is using, and flipping the status page between
+        connected and disconnected as it naps would make the distinction worthless. The
+        status simply ages instead, which is what ``device_seen_at`` exists to show.
+        """
+        interval = self.config.device.probe_interval_s
+        if not interval:
+            return
+        now = self.clock()
+        if now - self._last_probe_attempt < interval:
+            return
+        seen = self._device.seen_at
+        if seen is not None and now - seen < interval:
+            return
+        self.probe_device()
 
     def retry_queued(self) -> None:
         """Re-submit jobs stalled on an offline printer, once the retry gap passes.
@@ -269,6 +302,7 @@ class PrintWorker:
         One attempt, no backoff. The retry ladder in ``_send`` exists to get a *job*
         onto tape; there is no job here and nothing is lost by giving up immediately.
         """
+        self._last_probe_attempt = self.clock()
         printer = self.printer_factory()
         try:
             printer.connect()

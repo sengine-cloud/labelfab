@@ -46,6 +46,12 @@ wake_dummy_feed = false
 # what was remembered from the last print. Cannot wake a sleeping unit, so a miss costs
 # one connect timeout and the stored status is published unchanged.
 probe_on_start = true
+# Re-survey it when what we know is older than this, in seconds; 0 = off. Printing
+# already refreshes the reading, so this only fires on a printer nobody is using. Leave
+# it off on a battery unit that sleeps -- every miss costs a connect timeout. 900 is a
+# reasonable starting point for a mains-powered one. A refresh from InvenTree's
+# "Restart Machine" action arrives on the cmd topic and probes immediately, regardless.
+probe_interval_s = 0
 
 [tape]
 width_mm = 15.0

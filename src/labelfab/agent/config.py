@@ -102,6 +102,13 @@ class DeviceSection(BaseModel):
     #: stored snapshot is published unchanged. On by default; turn it off if that
     #: timeout is in the way of a fast start. Never runs on a broker reconnect.
     probe_on_start: bool = True
+    #: Re-survey the printer when what we know is older than this, in seconds. ``0``
+    #: disables it. Printing already refreshes the reading, so this only fires on a
+    #: printer nobody is using -- which is exactly when a status page would otherwise
+    #: age quietly. Off by default: on a unit that sleeps, every miss costs a connect
+    #: timeout on the print loop, and that is a bad trade for a page nobody is reading.
+    #: 900 (15 min) is a sensible starting point for a mains-powered printer.
+    probe_interval_s: float = Field(default=0.0, ge=0)
 
     @field_validator("density")
     @classmethod

@@ -91,8 +91,18 @@ It says so *and when it said so*. The printer is only reachable while it is bein
 to (it auto-powers-off, and a held-open socket just relocates that), so the agent
 remembers the last thing it heard and republishes it, stamped with `device_seen_at`.
 A consumer can then tell live truth from remembered truth instead of guessing, and no
-printer is woken to keep a status page tidy. `device.probe_on_start` surveys the printer
-once at startup when it happens to be awake.
+printer is woken to keep a status page tidy.
+
+Three ways the reading gets refreshed, in increasing order of how much you have to ask
+for them. `device.probe_on_start` surveys the printer at startup if it happens to be
+awake. `device.probe_interval_s` re-surveys it once the reading goes stale — measured on
+what the printer last *said*, so a printer that is being used is never probed at all.
+And publishing `probe` to the `cmd` topic surveys it right now, which is what a refresh
+button in a consumer UI should send.
+
+None of the three can wake a sleeping unit, so a miss is not a failure: the reading
+simply keeps its old timestamp and goes on ageing honestly. Only a printer that could
+not take a *job* is reported `disconnected`.
 
 Jams remain undetectable — the media bit distinguishes loaded from not, and nothing
 observed so far distinguishes a jam from either.

@@ -252,6 +252,32 @@ def test_a_non_retained_status_does_not_become_what_the_topic_holds(source):
     assert src.client.statuses[-1]["serial"] == SERIAL
 
 
+@pytest.mark.parametrize("body", [b"probe", b"refresh status", b"STATUS", b" Probe "])
+def test_a_refresh_command_reaches_the_print_loop(tmp_path, monkeypatch, body):
+    """What InvenTree's machine action sends. It must only ever enqueue: this runs on
+    paho's network thread, and touching the printer from there would race the print
+    loop that exists precisely so nothing needs a lock."""
+    import paho.mqtt.client as mqtt
+
+    from labelfab.agent.source_mqtt import PROBE_COMMAND
+
+    monkeypatch.setattr(mqtt, "Client", FakeClient)
+    enqueued: list[str] = []
+    config = make_config()
+    config.mqtt.host = "broker.invalid"
+    src = MqttSource(config, Spool(tmp_path / "spool.db"), enqueued.append)
+
+    class _Msg:
+        topic = "se/v1/print/d30-workshop/cmd"
+        payload = body
+        qos = 1
+        mid = 3
+
+    src._on_message(src.client, None, _Msg())
+    assert enqueued == [PROBE_COMMAND]
+    assert src.client.acked == [3]
+
+
 def test_a_flush_command_reaches_the_print_loop(tmp_path, monkeypatch):
     """The cmd topic is handled on paho's thread, so it must only ever enqueue."""
     import paho.mqtt.client as mqtt

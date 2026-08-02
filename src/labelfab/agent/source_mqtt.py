@@ -28,6 +28,11 @@ log = logging.getLogger("labelfab.mqtt")
 #: Sentinel the print loop recognises as "flush the pending strip now".
 FLUSH_COMMAND = "\x00flush"
 
+#: Sentinel for "go ask the printer what it is, now". Both sentinels exist because the
+#: cmd topic is handled on paho's network thread and nothing there may touch the
+#: printer -- the command only ever becomes a queue item for the print loop to run.
+PROBE_COMMAND = "\x00probe"
+
 
 class MqttSource:
     """Subscribes ``jobs``/``cmd``, publishes ``results``/``progress``/``status``."""
@@ -182,3 +187,9 @@ class MqttSource:
         body = msg.payload.decode("utf-8", "replace").strip().lower()
         if "flush" in body:
             self.enqueue(FLUSH_COMMAND)
+        # "probe" is what a consumer sends when a human pressed refresh: go and ask the
+        # printer rather than replaying what we remember. Checked before "status" so
+        # either word works -- this arrives from a UI, not from a machine, and being
+        # fussy about which synonym someone typed buys nothing.
+        elif "probe" in body or "status" in body:
+            self.enqueue(PROBE_COMMAND)
