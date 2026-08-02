@@ -166,6 +166,25 @@ def test_the_will_carries_last_known_truth(source):
     assert will["device_seen_at"] is not None
 
 
+def test_the_will_is_re_armed_so_it_does_not_describe_startup_forever(source):
+    """The will is fixed for the life of a connection -- it rides in the CONNECT packet
+    and the broker holds it. paho rebuilds that packet on every reconnect, though, so
+    re-arming bounds how stale the will can be by the reconnect interval rather than by
+    the process lifetime."""
+    src = source()
+    src.start()
+    assert json.loads(src.client.will[1])["serial"] is None  # nothing known at boot
+
+    _connect(src)
+    src.publish_status(KNOWN.to_status("d30-workshop", state="idle"))
+    _connect(src)  # a later reconnect: this is where the newer will gets armed
+
+    will = json.loads(src.client.will[1])
+    assert will["state"] == "disconnected"
+    assert will["serial"] == SERIAL
+    assert will["device_seen_at"] is not None
+
+
 def test_shutdown_says_disconnected_without_forgetting(source):
     src = source(KNOWN)
     src.stop()

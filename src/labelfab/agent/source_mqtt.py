@@ -72,14 +72,27 @@ class MqttSource:
     # -- lifecycle ---------------------------------------------------------- #
 
     def start(self) -> None:
-        # The will is set here rather than in __init__ because paho cannot change it on
-        # a live connection, so this is the last moment it can be made current -- after
-        # the startup probe and crash recovery have had their say.
+        # Armed here rather than in __init__ so it reflects whatever the startup probe
+        # and crash recovery learned, which happen after this object is built.
+        self._arm_will()
+        self.client.connect(self.config.mqtt.host, self.config.mqtt.port, self.config.mqtt.keepalive_s)
+        self.client.loop_start()
+
+    def _arm_will(self) -> None:
+        """Point the will at the current last-known truth.
+
+        The will lives in the CONNECT packet, so the broker holds a fixed payload for
+        the whole session and no amount of calling this changes what fires if *this*
+        connection drops. paho rebuilds CONNECT from these fields on every reconnect
+        though, so re-arming still moves the staleness window from "whenever the
+        process started" -- potentially weeks -- down to "the last reconnect", which
+        here is a few hours at most. Called from ``_on_connect``, i.e. from paho's own
+        network thread, which is also the thread that builds the packet, so there is
+        no window where the payload and the topic disagree.
+        """
         self.client.will_set(
             self.config.topic("status"), self._disconnected().model_dump_json(), qos=1, retain=True
         )
-        self.client.connect(self.config.mqtt.host, self.config.mqtt.port, self.config.mqtt.keepalive_s)
-        self.client.loop_start()
 
     def stop(self) -> None:
         try:
@@ -133,6 +146,7 @@ class MqttSource:
         # retained message that was correct a moment earlier, and the printer is asleep
         # and cannot be asked again.
         self.publish_status(self._last_status)
+        self._arm_will()  # for the connect after this one; see _arm_will
 
     def _on_message(self, client, userdata, msg) -> None:
         if msg.topic.endswith("/cmd"):
