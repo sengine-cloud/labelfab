@@ -43,8 +43,8 @@ log = logging.getLogger("labelfab.worker")
 #: Backoff between reconnect attempts within one send, in seconds.
 _BACKOFF_S = (1.0, 3.0, 9.0)
 
-#: How long the startup probe waits for the printer's replies to arrive on the
-#: transport's reader thread before reading them.
+#: How long a probe waits for the printer's replies to arrive on the transport's
+#: reader thread before reading them.
 _PROBE_SETTLE_S = 1.0
 
 
@@ -312,11 +312,11 @@ class PrintWorker:
             printer.refresh_telemetry()
         except D30Error as exc:
             printer.close()
-            log.info("startup probe: printer did not answer (%s); keeping the stored status", exc)
+            log.info("probe: printer did not answer (%s); keeping the stored status", exc)
             return False
         except Exception:  # a status nicety must never be what stops the agent starting
             printer.close()
-            log.exception("startup probe failed; keeping the stored status")
+            log.exception("probe failed; keeping the stored status")
             return False
         # Replies land asynchronously on the transport's reader thread, and unlike the
         # print path there is no print duration to cover the wait. Settling short is
