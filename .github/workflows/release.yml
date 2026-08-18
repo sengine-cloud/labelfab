@@ -46,6 +46,9 @@ jobs:
         with:
           name: deb-${{ matrix.arch }}
           path: dist/*.deb
+          # Hand-off to the release job only; the debs live on the GitHub
+          # release afterwards, so there is nothing to keep here.
+          retention-days: 1
 
   release:
     needs: build
