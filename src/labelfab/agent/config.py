@@ -158,6 +158,12 @@ class StripSection(BaseModel):
 
 class RenderSection(BaseModel):
     qr_base_url: str = ""
+    #: QR quiet zone in modules. The spec asks for 4, and 4 is right for a bare code.
+    #: A base URL with a scheme (``https://...``) is what lowering it pays for: that
+    #: payload is one QR version larger, and in the 12mm presets the QR shares its row
+    #: with the text, so at 4 it drops to 2px per module. 3 still lands on 2px; 2 brings
+    #: it back to 3px, with the code physically larger than a bare one at 4.
+    qr_quiet_zone: int = Field(default=4, ge=1, le=8)
     threshold: int = Field(default=128, ge=0, le=255)
 
 

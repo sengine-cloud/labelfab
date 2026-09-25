@@ -53,6 +53,19 @@ actually care about. Set `render.qr_base_url` to a short redirector and encode a
 a full URL. The table is pinned in `tests/test_scannability.py`, so if layout changes the
 test fails and this table gets revisited.
 
+A scheme in the base (`https://sngn.top/i/` rather than `SNGN.TOP/I/`) is worth having,
+since phones then offer to open the code instead of showing it as text. It costs one QR
+version, though, and in the 12mm presets the QR shares its row with the text. Pay for it
+with `render.qr_quiet_zone`:
+
+| Base on the `part` preset, 12mm | quiet zone 4 | 3 | 2 |
+|---|:--:|:--:|:--:|
+| `SNGN.TOP/I/` | ✅ | ✅ | ✅ |
+| `https://sngn.top/i/` | ❌ | ❌ | ✅ |
+
+That is the degraded read again. At 2 the prefixed code is back to 3px per module and
+physically larger than the bare one at 4. Pinned in the same test file.
+
 ## Layout
 
 | Package | What |

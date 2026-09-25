@@ -64,3 +64,28 @@ def test_an_unknown_density_is_rejected_at_load():
 
     with pytest.raises(ValidationError, match="not one of"):
         DeviceSection(density=3)
+
+
+def test_qr_quiet_zone_defaults_to_the_spec_and_reaches_the_renderer(tmp_path, harness):
+    """A value that stopped at the config section would still print at 4, so check it
+    arrives in the RenderConfig the worker hands to the renderer."""
+    assert Config().render.qr_quiet_zone == 4
+
+    toml = tmp_path / "agent.toml"
+    toml.write_text("[render]\nqr_quiet_zone = 2\n")
+    assert load(toml).render.qr_quiet_zone == 2
+
+    h = harness()
+    h.config.render.qr_quiet_zone = 2
+    assert h.worker._render_cfg().qr_quiet_zone == 2
+
+
+def test_a_quiet_zone_outside_the_contract_is_rejected_at_load():
+    import pytest
+    from pydantic import ValidationError
+
+    from labelfab.agent.config import RenderSection
+
+    for bad in (0, 9):
+        with pytest.raises(ValidationError):
+            RenderSection(qr_quiet_zone=bad)

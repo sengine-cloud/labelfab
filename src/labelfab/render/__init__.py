@@ -43,6 +43,7 @@ class RenderConfig:
     """Render-side knobs. Everything here is hardware- or taste-dependent."""
 
     qr_base_url: str = ""
+    qr_quiet_zone: int = 4
     threshold: int = 128
     rotation: int = 270
     mirror: bool = False
@@ -51,7 +52,7 @@ class RenderConfig:
 
 def _tree(label: LabelSpec, cfg: RenderConfig) -> Box:
     if label.preset is not None:
-        ctx = _presets.PresetContext(qr_base_url=cfg.qr_base_url)
+        ctx = _presets.PresetContext(qr_base_url=cfg.qr_base_url, qr_quiet_zone=cfg.qr_quiet_zone)
         return _presets.get(label.preset)(label.vars, ctx)
     children = list(label.elements or [])
     if len(children) == 1 and isinstance(children[0], Box):
