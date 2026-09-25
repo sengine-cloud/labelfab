@@ -204,17 +204,29 @@ class BarcodeDraw:
 # --------------------------------------------------------------------------- #
 
 
-def _wrap(text: str, font: ImageFont.FreeTypeFont, width: int) -> list[str]:
-    """Greedy wrap, breaking over-long words rather than overflowing."""
+def _wrap(
+    text: str, font: ImageFont.FreeTypeFont, width: int, *, break_words: bool = True
+) -> list[str] | None:
+    """Greedy wrap, breaking over-long words rather than overflowing.
+
+    With ``break_words=False`` a word wider than the line fails the wrap (``None``)
+    instead, so the caller can try a smaller size first. Splitting a code such as
+    ``INV-SI1`` into ``INV-SI`` and ``1`` makes it read as two different things.
+    """
     lines: list[str] = []
     for paragraph in text.split("\n"):
         current = ""
         for word in paragraph.split():
             trial = f"{current} {word}".strip()
-            if not current or font.getlength(trial) <= width:
+            # The first word of a paragraph is measured too. It used to be accepted
+            # unmeasured, so a one-word title grew until it hit max_pt and ran off
+            # the side of the label.
+            if font.getlength(trial) <= width:
                 current = trial
                 continue
             if font.getlength(word) > width:
+                if not break_words:
+                    return None
                 # A single unbreakable token; split it at the pixel boundary.
                 if current:
                     lines.append(current)
@@ -242,7 +254,9 @@ class TextDraw:
     spec: TextElement
     flex: float = 1.0
 
-    def _fit(self, width: int, height: int) -> tuple[ImageFont.FreeTypeFont, list[str]]:
+    def _search(
+        self, width: int, height: int, *, break_words: bool
+    ) -> tuple[ImageFont.FreeTypeFont, list[str]] | None:
         """Binary search the largest point size whose wrap fits the box."""
         lo, hi = self.spec.min_pt, self.spec.max_pt
         best: tuple[ImageFont.FreeTypeFont, list[str]] | None = None
@@ -251,11 +265,23 @@ class TextDraw:
                 break
             mid = (lo + hi) / 2
             font = load_font(bold=self.spec.bold, condensed=self.spec.condensed, size_px=pt_to_px(mid))
-            lines = _wrap(self.spec.value, font, width)
-            if len(lines) <= self.spec.max_lines and len(lines) * _line_height(font) <= height:
+            lines = _wrap(self.spec.value, font, width, break_words=break_words)
+            if (
+                lines is not None
+                and len(lines) <= self.spec.max_lines
+                and len(lines) * _line_height(font) <= height
+            ):
                 best, lo = (font, lines), mid
             else:
                 hi = mid
+        return best
+
+    def _fit(self, width: int, height: int) -> tuple[ImageFont.FreeTypeFont, list[str]]:
+        # Whole words first. A tall box would otherwise let a bigger size that splits
+        # a word beat a smaller one that keeps it intact.
+        best = self._search(width, height, break_words=False) or self._search(
+            width, height, break_words=True
+        )
         if best is not None:
             return best
 
@@ -289,8 +315,10 @@ class TextDraw:
         pt = min(self.spec.max_pt, max(self.spec.min_pt, per_line * 72.0 / 203.0 * 0.95))
         font = load_font(bold=self.spec.bold, condensed=self.spec.condensed, size_px=pt_to_px(pt))
         single = int(font.getlength(self.spec.value.replace("\n", " ")))
-        # Approximate a balanced wrap across the allowed number of lines.
-        natural_w = min(avail_w, max(1, -(-single // self.spec.max_lines)))
+        # Approximate a balanced wrap across the allowed number of lines, but never
+        # narrower than the longest word, which cannot wrap.
+        widest = max((int(font.getlength(w)) + 1 for w in self.spec.value.split()), default=1)
+        natural_w = min(avail_w, max(1, -(-single // self.spec.max_lines), widest))
         lines = _wrap(self.spec.value, font, natural_w)
         return natural_w, min(avail_h, len(lines) * _line_height(font))
 
