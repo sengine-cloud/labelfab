@@ -97,6 +97,32 @@ DENSITY_CLIFF = [
 ]
 
 
+#: A scheme in the short-link base is paid for in quiet zone. Measured on the part
+#: preset at 12mm, where the QR shares its row with the text: the prefixed payload is
+#: one QR version bigger, so at the spec's 4 modules it drops to 2px per module and
+#: fails a degraded read. 3 does not help. 2 brings it back to 3px. The bare base
+#: survives at any setting, which is why 4 stays the default.
+PRESET_QUIET_ZONE = [
+    ("SNGN.TOP/I/", 4, True),
+    ("https://sngn.top/i/", 4, False),
+    ("https://sngn.top/i/", 3, False),
+    ("https://sngn.top/i/", 2, True),
+]
+
+
+@pytest.mark.parametrize(("base", "quiet_zone", "survives_degraded"), PRESET_QUIET_ZONE)
+def test_a_scheme_in_the_base_costs_two_quiet_zone_modules(base, quiet_zone, survives_degraded):
+    cfg = RenderConfig(qr_base_url=base, qr_quiet_zone=quiet_zone)
+    label = LabelSpec(
+        preset="part",
+        vars={"code": "PA39", "title": "INV-PA39 · A1533", "sub": "iPhone 5s"},
+        length_mm=30,
+    )
+    img = _through_the_wire(label, TAPE_12, cfg)
+    assert _decode(img) == f"{base}PA39", "should always decode at 1:1"
+    assert (_decode(_as_phone_camera(img)) == f"{base}PA39") is survives_degraded
+
+
 @pytest.mark.parametrize(("tape_mm", "payload", "survives_degraded"), DENSITY_CLIFF)
 def test_density_cliff_is_where_we_think_it_is(tape_mm, payload, survives_degraded):
     """Pin the payload lengths that survive a degraded scan on each tape width.

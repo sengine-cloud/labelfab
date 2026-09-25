@@ -21,8 +21,9 @@ PresetFn = Callable[[Mapping[str, str], "PresetContext"], Box]
 class PresetContext:
     """Render-side configuration a preset may consult."""
 
-    def __init__(self, qr_base_url: str = "") -> None:
+    def __init__(self, qr_base_url: str = "", qr_quiet_zone: int = 4) -> None:
         self.qr_base_url = qr_base_url
+        self.qr_quiet_zone = qr_quiet_zone
 
     def qr_value(self, code: str) -> str:
         """Prefer a short redirector: QR module size, not capacity, is the limit.
@@ -54,7 +55,7 @@ def qr_caption(v: Mapping[str, str], ctx: PresetContext) -> Box:
         direction="row",
         gap_mm=1.0,
         children=[
-            QrElement(value=ctx.qr_value(_g(v, "code", "pk"))),
+            QrElement(value=ctx.qr_value(_g(v, "code", "pk")), quiet_zone=ctx.qr_quiet_zone),
             Box(
                 direction="col",
                 align="start",
@@ -115,7 +116,7 @@ def location(v: Mapping[str, str], ctx: PresetContext) -> Box:
                     ),
                 ],
             ),
-            QrElement(value=ctx.qr_value(_g(v, "code", "pk"))),
+            QrElement(value=ctx.qr_value(_g(v, "code", "pk")), quiet_zone=ctx.qr_quiet_zone),
         ],
     )
 

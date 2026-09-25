@@ -110,6 +110,15 @@ def test_qr_base_url_is_applied_by_presets():
     assert plain.tobytes() != prefixed.tobytes()
 
 
+def test_qr_quiet_zone_is_applied_by_presets():
+    spec = LabelSpec(preset="part", vars={"code": "PA39", "title": "t"}, length_mm=30)
+    spec_default = render_label(spec, TAPE_12, RenderConfig(qr_base_url="https://sngn.top/i/"))
+    tighter = render_label(
+        spec, TAPE_12, RenderConfig(qr_base_url="https://sngn.top/i/", qr_quiet_zone=2)
+    )
+    assert spec_default.tobytes() != tighter.tobytes()
+
+
 # --------------------------------------------------------------------------- #
 # Barcode
 # --------------------------------------------------------------------------- #

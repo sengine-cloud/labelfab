@@ -119,6 +119,7 @@ class PrintWorker:
     def _render_cfg(self) -> RenderConfig:
         return RenderConfig(
             qr_base_url=self.config.render.qr_base_url,
+            qr_quiet_zone=self.config.render.qr_quiet_zone,
             threshold=self.config.render.threshold,
             rotation=self.config.tape.rotation,
             mirror=self.config.tape.mirror,

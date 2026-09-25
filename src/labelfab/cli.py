@@ -30,6 +30,7 @@ def _load_job(path: str) -> PrintJob:
 def _config(args) -> RenderConfig:
     return RenderConfig(
         qr_base_url=args.qr_base_url,
+        qr_quiet_zone=args.qr_quiet_zone,
         threshold=args.threshold,
         rotation=args.rotation,
         mirror=args.mirror,
@@ -277,6 +278,14 @@ def cmd_probe(args) -> int:
 def _add_render_flags(p: argparse.ArgumentParser) -> None:
     p.add_argument("job", help="path to a job JSON file, or - for stdin")
     p.add_argument("--qr-base-url", default="", help="prefix codes with a short-link base")
+    p.add_argument(
+        "--qr-quiet-zone",
+        type=int,
+        default=4,
+        choices=range(1, 9),
+        metavar="{1..8}",
+        help="QR quiet zone in modules (spec: 4)",
+    )
     p.add_argument("--threshold", type=int, default=128, help="1-bit cutoff (0-255)")
     p.add_argument("--rotation", type=int, default=270, choices=[0, 90, 180, 270])
     p.add_argument("--mirror", action="store_true")
