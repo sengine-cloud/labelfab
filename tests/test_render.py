@@ -171,6 +171,48 @@ def test_very_long_text_is_truncated_not_overflowed():
     assert img.size == (mm_to_px(20), mm_to_px(15))
 
 
+def test_a_one_word_title_is_sized_to_the_box_not_past_it():
+    """The first word of a paragraph used to skip the width check, so a one-word
+    title grew to max_pt and ran off the label: "INV-SI1" printed as "INV-SI"."""
+    from labelfab.render.elements import TextDraw
+
+    td = TextDraw(spec=TextElement(value="INV-SI1", max_lines=2, bold=True, max_pt=16))
+    font, lines = td._fit(120, 60)
+    assert all(font.getlength(line) <= 120 for line in lines)
+
+
+def test_a_word_is_kept_whole_when_a_smaller_size_fits():
+    """With room for two lines, "INV-S" / "I1" at a bigger size also passes the fit.
+    A code split in two reads as two codes, so the smaller whole word wins."""
+    from labelfab.render.elements import TextDraw
+
+    td = TextDraw(spec=TextElement(value="INV-SI1", max_lines=2, bold=True, max_pt=16))
+    font, lines = td._fit(120, 120)
+    assert lines == ["INV-SI1"]
+    assert font.getlength(lines[0]) <= 120
+
+
+def test_a_word_too_wide_at_any_size_is_still_split():
+    """Whole words are preferred, not required. A token that cannot fit at min_pt is
+    split across lines rather than truncated to nothing."""
+    from labelfab.render.elements import TextDraw
+
+    td = TextDraw(spec=TextElement(value="X" * 20, max_lines=2, min_pt=5, max_pt=6))
+    font, lines = td._fit(120, 60)
+    assert len(lines) == 2
+    assert all(font.getlength(line) <= 120 for line in lines)
+
+
+def test_a_one_word_title_leaves_the_right_edge_clear():
+    img = render_label(
+        LabelSpec(
+            preset="part", vars={"code": "PA12", "title": "INV-PA12", "sub": "Widget"}, length_mm=30
+        ),
+        TAPE_12,
+    )
+    assert all(img.getpixel((img.width - 1, y)) >= 128 for y in range(img.height))
+
+
 def test_text_stays_inside_the_canvas():
     img = render_label(
         LabelSpec(elements=[TextElement(value="ABCDEFGH", max_lines=1)], length_mm=25), TAPE_15
