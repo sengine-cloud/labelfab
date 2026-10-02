@@ -42,9 +42,10 @@ def _build(args) -> Image.Image:
     job = _load_job(args.job)
     cfg = _config(args)
     images = render_job(job, cfg)
-    if args.discrete or len(images) == 1:
+    if args.discrete:
         return images[0] if len(images) == 1 else concat_strip(images, cfg.separator_mm)
-    return concat_strip(images, cfg.separator_mm)
+    # A strip is framed by separators, even for one label: that is what the agent prints.
+    return concat_strip(images, cfg.separator_mm, bookends=True)
 
 
 def _ansi(img: Image.Image, scale: int) -> str:
@@ -164,12 +165,19 @@ def _stack(raster, copies: int):
 def cmd_probe(args) -> int:
     """Hardware bring-up. Every sub-mode answers one config constant."""
     from labelfab.device import D30Config, PhomemoD30
+    from labelfab.device.protocol import PAPER_CONTINUOUS, PAPER_GAP
+
+    # The printer stores the tape type it is sent and feeds accordingly, so a probe on a
+    # continuous roll must say so or it leaves the printer hunting for a die gap.
+    paper_type = PAPER_CONTINUOUS if args.tape == "continuous" else PAPER_GAP
 
     # Pace sweep needs a fresh pace_factor per pass, so it manages its own printers
     # and returns before the shared one below.
     if args.pace_sweep:
         for pf in [float(x) for x in args.pace_sweep.split(",")]:
-            printer = PhomemoD30(_open_transport(args), config=D30Config(pace_factor=pf))
+            printer = PhomemoD30(
+                _open_transport(args), config=D30Config(pace_factor=pf, paper_type=paper_type)
+            )
             with printer:
                 printer.print_raster(printer.self_test(args.width_px, 3200))
             print(
@@ -179,7 +187,10 @@ def cmd_probe(args) -> int:
             )
         return 0
 
-    printer = PhomemoD30(_open_transport(args), config=D30Config(pace_factor=args.pace_factor))
+    printer = PhomemoD30(
+        _open_transport(args),
+        config=D30Config(pace_factor=args.pace_factor, paper_type=paper_type),
+    )
     capture = None
 
     with printer:
@@ -342,6 +353,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--ble-write-uuid", default=DEFAULT_WRITE_UUID, help="GATT write characteristic (ble)"
     )
     probe.add_argument("--adapter", default=None, help="Bluetooth adapter, e.g. hci1 (ble)")
+    probe.add_argument(
+        "--tape",
+        choices=("continuous", "gap"),
+        default="continuous",
+        help="the stock loaded; sets the printer's stored tape type (default: continuous)",
+    )
     probe.add_argument("--width-px", type=int, default=96, help="96 for 12mm and 15mm tapes")
     probe.add_argument("--length-px", type=int, default=320)
     probe.add_argument("--pace-factor", type=float, default=1.2)

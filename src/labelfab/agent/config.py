@@ -28,7 +28,7 @@ from pydantic_settings import (
     TomlConfigSettingsSource,
 )
 
-from labelfab.device.protocol import DENSITIES, DENSITY_LIGHT
+from labelfab.device.protocol import DENSITIES, DENSITY_LIGHT, VENDOR_FEED_LINES
 from labelfab.device.transport import DEFAULT_TRANSPORT, TRANSPORTS
 
 #: Where the packaged config lives; overridable for tests and the dir-only mode.
@@ -92,6 +92,12 @@ class DeviceSection(BaseModel):
     density: int = DENSITY_LIGHT
     #: A blank feed on the first print after a wake, if bring-up finds faint labels.
     wake_dummy_feed: bool = False
+    #: Lines fed after a frame on continuous tape (``tape.kind = "continuous"``), at
+    #: roughly 8 lines/mm. 23 is the vendor's own value (~2.9mm). Raise it if the last
+    #: label of a batch still sits inside the printer when the print finishes. The
+    #: printer's head is behind the exit slot, so the edge of the final label has to be
+    #: fed out to be torn off. Ignored on die-cut tape.
+    feed_lines: int = Field(default=VENDOR_FEED_LINES, ge=0, le=255)
     #: Drop the socket between batches: the D30 auto-sleeps, so a held-open socket
     #: just relocates the failure. Reconnect-per-batch is cheaper to reason about.
     idle_disconnect: bool = True
@@ -154,6 +160,12 @@ class StripSection(BaseModel):
     #: Flush once this many labels have accumulated.
     max_labels: int = Field(default=24, ge=1, le=200)
     separator_mm: float = 2.0
+    #: On continuous tape, print a job that asks for ``discrete`` as one strip: its labels
+    #: in a single frame, flushed as soon as the job is queued, rather than a frame per
+    #: label. Every print rolls ~8mm of tape before its first ink, so this pays that once
+    #: per job. Turn it off to honour ``discrete`` literally. Ignored on die-cut tape,
+    #: which always prints a frame per label.
+    discrete_as_strip: bool = True
 
 
 class RenderSection(BaseModel):

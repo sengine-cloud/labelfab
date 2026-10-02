@@ -23,6 +23,25 @@ def test_strip_is_one_frame(harness):
     assert h.spool.printed_labels("j") == {0, 1, 2}
 
 
+def test_a_strip_on_the_wire_is_framed_by_separators(harness):
+    """What the head prints first and last are cut ticks, one separator long each; the
+    labels' own ink sits between them. The frame is the labels plus a separator at each
+    end and between."""
+    from labelfab.contract import mm_to_px
+    from labelfab.device import decode
+
+    h = harness()
+    h.submit(make_job("j", n_labels=3, flush=True))
+    img = decode(bytes(h.last_transport.buf))  # landscape, ink = dark
+
+    sep = mm_to_px(2.0)
+    ink = [x for x in range(img.width) if any(img.getpixel((x, y)) < 128 for y in range(img.height))]
+    assert ink[0] == sep // 2, "the very first ink is the opening cut tick"
+    assert ink[1] > sep, "...and the first label's own ink starts after the separator"
+    assert ink[-1] == img.width - sep + sep // 2, "the last ink is the closing cut tick"
+    assert ink[-2] < img.width - sep, "...with the last label's ink before the final separator"
+
+
 def test_size_trigger_flushes_without_explicit_flush(harness):
     h = harness(max_labels=2, max_length_mm=10_000)
     h.submit(make_job("j", n_labels=2))  # no flush; count trigger fires
@@ -68,11 +87,44 @@ def test_strip_partial_failure_is_terminal_and_flagged(harness):
     assert result.partial_tape_consumed is True
 
 
-def test_discrete_prints_a_frame_per_label(harness):
+def test_a_discrete_job_on_continuous_tape_is_one_strip(harness):
+    """Every print rolls ~8mm of tape before its first ink, so a frame per label pays that
+    per label. The InvenTree plugin always asks for ``discrete``; on continuous tape that
+    now means one strip per job, sent as soon as the job is queued (no idle wait)."""
     h = harness()
+    h.submit(make_job("j", n_labels=3, batch_mode="discrete"))  # no flush, no clock advance
+    assert h.frames == 1
+    result = h.publisher.results[-1]
+    assert result.state == "completed"
+    assert h.spool.printed_labels("j") == {0, 1, 2}
+
+
+def test_discrete_can_still_be_honoured_literally(harness):
+    h = harness()
+    h.config.strip.discrete_as_strip = False
     h.submit(make_job("j", n_labels=3, batch_mode="discrete"))
     assert h.frames == 3
     assert h.publisher.results[-1].state == "completed"
+
+
+def test_discrete_on_die_cut_tape_is_still_a_frame_per_label(harness):
+    """A frame spanning die gaps would print across them, whatever the setting."""
+    h = harness()
+    h.config.tape.kind = "gap"
+    h.config.tape.length_mm = 30.0
+    assert h.config.strip.discrete_as_strip is True
+    h.submit(make_job("j", n_labels=3, batch_mode="discrete"))
+    assert h.frames == 3
+
+
+def test_a_discrete_job_prints_together_with_a_strip_already_waiting(harness):
+    """The job's flush sends what is pending too: one frame, one roll, both jobs done."""
+    h = harness(max_labels=100, max_length_mm=10_000)
+    h.submit(make_job("early", n_labels=1))  # a strip job, still inside its idle window
+    assert h.frames == 0
+    h.submit(make_job("late", n_labels=2, batch_mode="discrete"))
+    assert h.frames == 1
+    assert {r.job_id for r in h.publisher.results if r.state == "completed"} == {"early", "late"}
 
 
 def test_recovery_skips_already_printed_labels(harness):

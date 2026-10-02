@@ -105,7 +105,7 @@ def test_the_default_print_path_uses_only_verified_commands():
     preamble = p.print_preamble(12, 320, density=p.DENSITY_MEDIUM, copies=2)
     # Every 2- or 3-byte opcode prefix present must belong to a verified command.
     for cmd in (
-        p.UNKNOWN_0A,
+        p.PAPER_TYPE,
         p.PRINT_DENSITY,
         p.LEFT_MARGIN,
         p.PRINT_MULTI,
@@ -115,6 +115,17 @@ def test_the_default_print_path_uses_only_verified_commands():
     ):
         assert cmd.opcode in verified, f"{cmd.name} is on the print path but not VERIFIED"
         assert cmd.opcode in preamble or cmd is p.PRINT_IMAGE
+
+
+def test_the_continuous_print_path_uses_only_verified_commands():
+    """The agent's other default path: continuous tape ends every frame in ``ESC d``."""
+    verified = {
+        c.opcode
+        for c in vars(p).values()
+        if isinstance(c, p.Command) and c.support is p.Support.VERIFIED
+    }
+    for cmd in (p.PAPER_TYPE, p.PRINT_DENSITY, p.INIT_PRINTER, p.PRINT_IMAGE, p.PRINT_AND_FEED):
+        assert cmd.opcode in verified, f"{cmd.name} is on the continuous path but not VERIFIED"
 
 
 def test_session_setup_uses_only_verified_commands():
@@ -131,6 +142,28 @@ def test_session_setup_is_pinned_to_the_captured_sequence():
     assert b"".join(p.session_setup(density=p.DENSITY_MEDIUM)).hex() == (
         "1f11381f11121f11131f11091f11111f11191f11071f11081f110e1f110a1f110202"
     )
+
+
+def test_session_setup_carries_the_tape_type_it_is_given():
+    """The printer stores this and feeds accordingly, so it has to follow the tape."""
+    gap = b"".join(p.session_setup(density=p.DENSITY_MEDIUM, paper_type=p.PAPER_GAP))
+    cont = b"".join(p.session_setup(density=p.DENSITY_MEDIUM, paper_type=p.PAPER_CONTINUOUS))
+    assert gap.endswith(bytes.fromhex("1f110a1f110202"))
+    assert cont.endswith(bytes.fromhex("1f110b1f110202"))
+    assert gap[:-7] == cont[:-7], "only the tape type differs"
+
+
+def test_the_old_unidentified_opcode_is_the_die_cut_tape_type():
+    """``1f110a`` was sent for months as 'meaning unknown'. It is ``PAPER_TYPE(gap)``."""
+    assert p.PAPER_TYPE(p.PAPER_GAP) == bytes.fromhex("1f110a")
+    assert p.PAPER_TYPE(p.PAPER_CONTINUOUS) == bytes.fromhex("1f110b")
+
+
+def test_an_unknown_tape_type_is_refused():
+    with pytest.raises(ValueError, match="paper_type"):
+        p.session_setup(paper_type=0x26)  # the vendor's black-mark stock, not driven here
+    with pytest.raises(ValueError, match="paper_type"):
+        p.print_preamble(12, 320, density=1, paper_type=0x00)
 
 
 def test_batching_changes_framing_not_bytes():
@@ -151,6 +184,26 @@ def test_preamble_carries_copies_only_when_more_than_one():
     many = p.print_preamble(12, 320, copies=4)
     assert p.PRINT_MULTI.opcode not in one
     assert p.PRINT_MULTI(4) in many
+
+
+def test_the_die_cut_preamble_is_pinned():
+    """Tape type, density, margin, ESC @, exit-compress, GS v 0 header: the old bytes."""
+    assert p.print_preamble(12, 160, density=p.DENSITY_LIGHT).hex() == (
+        "1f110a1f1102011f1124001b401f1135001d7630000c00a000"
+    )
+
+
+def test_the_continuous_preamble_is_the_vendors_continuous_path():
+    """``printConstinuous``: tape type and density, then ESC @ and the raster. Nothing
+    else: no margin, no exit-compress, no copy count."""
+    assert p.print_preamble(12, 160, density=p.DENSITY_LIGHT, paper_type=p.PAPER_CONTINUOUS).hex() == (
+        "1f110b1f1102011b401d7630000c00a000"
+    )
+
+
+def test_continuous_tape_has_no_print_multi():
+    with pytest.raises(ValueError, match="continuous"):
+        p.print_preamble(12, 160, density=1, copies=2, paper_type=p.PAPER_CONTINUOUS)
 
 
 def test_preamble_rejects_a_copy_count_that_will_not_fit():

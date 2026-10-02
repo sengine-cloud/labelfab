@@ -155,13 +155,53 @@ Android:  1f110a  1f1102 <d>  |  1f1124 00  1b40                | GS v 0 …
 iOS:      1f1102 <d>  1f110a  |  1f1121 01  1b40  1f1135 00     | GS v 0 …
 ```
 
-Common to both: `PRINT_DENSITY`, the unidentified `1f110a`, and `1b40` (`ESC @`).
+Common to both: `PRINT_DENSITY`, `1f110a` (the stored **tape type**, see below), and `1b40`
+(`ESC @`).
 iOS additionally sends `PRINT_MULTI = 1` (`1f1121 01`) and `EXIT_COMPRESS_MODE`
 (`1f1135 00`); Android additionally sends `LEFT_MARGIN` (`1f1124 00`).
 
 **The preamble is tolerant** — both variants print correctly. Recommended for
-`labelfab`: send density, `1f110a`, `LEFT_MARGIN <computed>`, `1f1135 00`, `1b40`,
-then the raster. `1f1135 00` explicitly leaves compress mode and is cheap insurance.
+`labelfab` on **die-cut** stock: send the tape type (`1f110a`), density,
+`LEFT_MARGIN <computed>`, `1f1135 00`, `1b40`, then the raster. `1f1135 00` explicitly
+leaves compress mode and is cheap insurance. **Continuous** stock takes a different
+path, below.
+
+### Tape type — the "unidentified" `1f110a` ✅ (resolved 2026-10-02)
+
+`1f11 <n>` stores what kind of tape the printer believes is loaded, and the printer
+**acts on it**. The vendor app's `setPaperType` sends `1f110b` for continuous and
+`1f110a` for every label-stock type (`0x26` and `0x4e` also exist, for stocks this
+project does not drive). The `LABEL_TYPE` query (`1f1119`) reads it back as `1a0c <n>`:
+`0x0a` = die-cut, `0x0b` = continuous.
+
+Both vendor captures were taken on die-cut stock, so the `1f110a` in them looked like a
+constant. labelfab sent it on **every connect and every frame** for months, which told
+the printer "die-cut" while a continuous roll was loaded. In that state:
+
+| Sequence sent (continuous roll loaded) | Tape type held | Result |
+|---|---|---|
+| raster, no trailing feed | die-cut (`0a`) | prints, then pads a long fixed length and stops |
+| raster + `ESC d 23` | die-cut (`0a`) | **feeds until power is cut** — it is looking for a gap |
+| `ESC @` + raster + `ESC d 23` (vendor continuous bytes) | die-cut (`0a`) | same runaway |
+| `1f110b`, density, `ESC @`, raster, `ESC d 23` | continuous (`0b`) | `print_complete` ~4.6s after the last byte, about 2 cm of padding, stops by itself |
+
+The tape type does not survive a power cycle: a printer switched off and on read back
+`label_type` 10 (die-cut) until the agent connected and sent `1f110b`. So it has to be sent
+on every connection, which `session_setup` and the frame preamble both do.
+
+The runaway was the printer behaving correctly for the tape type it had been told.
+`label_type` read back 10 before and 11 after the set. A 3-label strip went through
+the agent as one frame (`printed=1`) with the type set from `[tape] kind`, and came out
+clean with about 2 cm of padding.
+
+Vendor continuous path (`D30Printer.printConstinuous`), now what the agent sends when
+`tape.kind = "continuous"`:
+
+```
+1f11 0b  1f1102 <d>  1b40  |  1d763000 <hdr> <raster>  |  1b64 17
+```
+
+No `LEFT_MARGIN`, no `PRINT_MULTI`, no `1f1135 00`: a copy is another frame there.
 
 Then the raster frame itself:
 
@@ -176,7 +216,16 @@ lines, followed by exactly 2880 bytes. 12 × 240 = 2880 ✅.
 - `xL/xH` — bytes per line, little-endian.
 - `yL/yH` — line count, little-endian, **plain 16-bit** ✅ (0x00f0 = 240 in one frame).
 - Density: **1 = light, 2 = medium, 4 = heavy** ✅ (matches `D30Constant.TYPE_CONCENTRATION_*`).
-- `1f110a` — unidentified. Once per job, adjacent to density, on both platforms. Send it.
+- `1f110a` — the die-cut tape type; see "Tape type" above. Once per job, adjacent to density.
+
+### Minimum tape position — about 8 mm of dead tape ✅ (measured 2026-10-02)
+
+Printing on a cut piece of tape inserted to the printer's **minimum position** (the least
+tape that still reads as present) leaves about **8 mm** between that position and the
+first printed line, 8.5 mm on a ruler photo. That is mechanical (minimum insertion
+position to print head), not padding: the raster puts only ~1 mm outside each cut tick,
+and the tick-to-tick length matches the raster (41.7-42.5 mm measured against 41.4 mm).
+Software cannot print into those 8 mm; cut at the ticks to drop them.
 
 ### Do not chunk at 255 lines
 
@@ -222,8 +271,8 @@ Both apps open with the same query set. Android batches several into one write
 | `1f110e` | `AUTO_POWER_TIME` |
 | `1f1165` | `POWER_KEY_TYPE` (iOS only) |
 | `1f114a` | `BT_LOSS_TEST` / `GET_DATE_TITLE` — opcode collision, iOS only |
-| `1f110a` | unidentified (also appears per print job) |
-| `1f110202` | `PRINT_DENSITY = 2` — the only *set* in the group |
+| `1f110a` | `PAPER_TYPE` = die-cut (also sent per print job) |
+| `1f110202` | `PRINT_DENSITY = 2` |
 
 ## Responses — the printer talks back ✅
 
@@ -482,11 +531,15 @@ firmware caps it below 65535. Also: does the printer auto-align to a die-cut gap
 
 Print 10 labels as one strip, then 10 discretely. Measure the tape each consumed.
 
-**Open question:** both captured jobs used the die-cut path — no feed after the raster.
-The vendor's *continuous* path (`printConstinuous`) instead sends `1b 40` once and then
-`1d 76 30 00 …` + **`1b 64 17`** (feed 23 lines ≈ 2.88 mm) after each label. Default
-media here is continuous, so **that feed is still unverified** and 23 lines is the
-vendor's own separator value — compare against `separator_mm = 2.0`.
+Both captured jobs used the die-cut path — no feed after the raster. The vendor's
+*continuous* path (`printConstinuous`) instead sends `1b 40` once and then
+`1d 76 30 00 …` + **`1b 64 17`** (feed 23 lines ≈ 2.88 mm) after each label. That feed is
+now verified, **but only with the tape type set to continuous** (see "Tape type"):
+with the die-cut type held it runs the roll away. 23 lines is the vendor's own value;
+`device.feed_lines` changes it.
+
+The leader/trailer saving of strip mode is **not measured**: the "50% of a label" figure
+that motivated it was taken while the printer held the wrong tape type.
 
 ### 6. Pace sweep
 

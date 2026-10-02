@@ -30,6 +30,11 @@ from labelfab.device.protocol import (
     DENSITIES,
     DENSITY_MEDIUM,
     MAX_FRAME_LINES,
+    PAPER_CONTINUOUS,
+    PAPER_GAP,
+    PAPER_TYPES,
+    PRINT_AND_FEED,
+    VENDOR_FEED_LINES,
     print_preamble,
     session_setup,
     telemetry_refresh,
@@ -64,12 +69,26 @@ class D30Config:
     #: exists to replace. Costs nothing on the happy path: the wait returns as soon as
     #: the frame arrives.
     post_print_margin_s: float = 3.5
+    #: Extra wait when a trailing feed follows the frame (continuous tape). Measured on
+    #: fw 2.1.2: ``print_complete`` lands ~4.6s after the last byte of a short label that
+    #: ends in ``ESC d 23``, against ~3.0s without the feed. Without this the wait would
+    #: give up just before the frame arrives and the connection would close mid-feed.
+    post_feed_margin_s: float = 2.5
     #: Send a short blank feed on the first print after a wake. Some units print the
     #: first label faint otherwise; confirmed or ruled out during bring-up.
     wake_dummy_feed: bool = False
     #: Burn darkness: 1 light, 2 medium, 4 heavy. Verified by printing one label at
     #: each against byte-identical rasters.
     density: int = DENSITY_MEDIUM
+    #: The tape the printer is told is loaded: ``PAPER_GAP`` (die-cut) or
+    #: ``PAPER_CONTINUOUS``. It is sent on every connect and with every frame, and the
+    #: printer stores it, so getting it wrong feeds tape: a printer holding the die-cut
+    #: value looks for a gap after each print and, on a continuous roll, never finds one.
+    #: Defaults to die-cut because that is what the captured vendor sequence carries.
+    paper_type: int = PAPER_GAP
+    #: Lines fed after a frame on continuous tape (``ESC d n``). 23 is the vendor's own
+    #: value, about 2.9mm. Ignored on die-cut tape, where the printer aligns to the gap.
+    feed_lines: int = VENDOR_FEED_LINES
     #: Head width in bytes, for ``LEFT_MARGIN`` letterboxing. We have definitively
     #: verified that the physical print head is exactly 96 dots (12 bytes) wide.
     head_width_bytes: int = 12
@@ -82,6 +101,10 @@ class D30Config:
     def __post_init__(self) -> None:
         if self.density not in DENSITIES:
             raise ValueError(f"density {self.density} is not one of {DENSITIES}")
+        if self.paper_type not in PAPER_TYPES:
+            raise ValueError(f"paper_type {self.paper_type:#04x} is not one of {PAPER_TYPES}")
+        if not 0 <= self.feed_lines <= 0xFF:
+            raise ValueError(f"feed_lines {self.feed_lines} does not fit the one-byte field")
 
 
 @dataclass
@@ -127,7 +150,9 @@ class PhomemoD30:
         """Open the transport and run the session-setup sequence."""
         self.transport.open()
         for packet in session_setup(
-            density=self.config.density, batched=self.config.batch_session_queries
+            density=self.config.density,
+            batched=self.config.batch_session_queries,
+            paper_type=self.config.paper_type,
         ):
             self.transport.write(packet)
             self.transport.flush()
@@ -199,6 +224,7 @@ class PhomemoD30:
                 density=density if density is not None else self.config.density,
                 copies=copies,
                 head_width_bytes=self.config.head_width_bytes,
+                paper_type=self.config.paper_type,
             )
         )
         self.transport.flush()
@@ -212,10 +238,20 @@ class PhomemoD30:
             self.transport.flush()
             self._pace(len(chunk), raster.width_bytes)
 
-        if wait:
-            self._await_completion(raster, copies, completed_before)
+        # Continuous tape: the vendor feeds a little after every frame so the printed
+        # edge clears the head. Only with the paper type set to continuous -- the same
+        # byte on a printer holding the die-cut value feeds until it finds a gap.
+        feeding = self.config.paper_type == PAPER_CONTINUOUS and self.config.feed_lines > 0
+        if feeding:
+            self.transport.write(PRINT_AND_FEED(self.config.feed_lines))
+            self.transport.flush()
 
-    def _await_completion(self, raster: DeviceRaster, copies: int, before: int) -> None:
+        if wait:
+            self._await_completion(raster, copies, completed_before, feeding=feeding)
+
+    def _await_completion(
+        self, raster: DeviceRaster, copies: int, before: int, *, feeding: bool = False
+    ) -> None:
         """Wait for the printer to say it finished, or time out and assume it did.
 
         The ``0x0F`` frame arrives about 2.4s after the last raster byte for a single
@@ -223,6 +259,8 @@ class PhomemoD30:
         between "we sent bytes" and "the printer acknowledged the job".
         """
         budget = self.print_duration_s(raster, copies) + self.config.post_print_margin_s
+        if feeding:
+            budget += self.config.post_feed_margin_s
         fb = self.transport.feedback
         # If the link has told us nothing at all so far -- no frames, no ACKs -- there
         # is no reason to expect it to announce completion either. Sleep the duration

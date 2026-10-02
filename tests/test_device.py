@@ -17,6 +17,7 @@ from labelfab.device import (
     print_header,
 )
 from labelfab.device.d30 import LINES_PER_SECOND
+from labelfab.device.protocol import PAPER_CONTINUOUS, PAPER_GAP
 from labelfab.render import concat_strip, render_label, to_device
 from labelfab.render.raster import DeviceRaster
 
@@ -461,3 +462,110 @@ def test_the_old_margin_would_have_missed_it():
     printer = _printer_that_answers_after(3.0, margin=0.3)
     printer.print_raster(printer.self_test(96, 200))
     assert printer.feedback.prints_completed == 0
+
+
+# --------------------------------------------------------------------------- #
+# Continuous tape. The tape type is stored by the printer and decides what it does
+# after a frame: told die-cut it hunts for a gap, so a continuous roll runs away.
+# --------------------------------------------------------------------------- #
+
+
+def test_the_default_tape_type_is_die_cut_as_captured():
+    printer, transport, _ = _printer(inter_packet_delay_s=0)
+    printer.connect()
+    assert bytes.fromhex("1f110a") in bytes(transport.buf)
+    assert bytes.fromhex("1f110b") not in bytes(transport.buf)
+
+
+def test_continuous_tape_is_announced_on_connect_not_just_per_frame():
+    printer, transport, _ = _printer(inter_packet_delay_s=0, paper_type=PAPER_CONTINUOUS)
+    printer.connect()
+    assert bytes(transport.buf).endswith(bytes.fromhex("1f110b1f110202"))
+    assert bytes.fromhex("1f110a") not in bytes(transport.buf), "must never say die-cut"
+
+
+def test_continuous_tape_never_sends_the_die_cut_type_anywhere():
+    """The regression: ``1f110a`` on every connect and every frame put the printer in gap
+    mode, so it padded every label and ran away on ``ESC d``."""
+    printer, transport, _ = _printer(inter_packet_delay_s=0, pace_factor=0, paper_type=PAPER_CONTINUOUS)
+    with printer:
+        printer.print_raster(_blank(96, 160), wait=False)
+    assert bytes.fromhex("1f110a") not in bytes(transport.buf)
+
+
+def test_a_continuous_frame_ends_in_one_feed():
+    printer, transport, _ = _printer(inter_packet_delay_s=0, pace_factor=0, paper_type=PAPER_CONTINUOUS)
+    raster = _blank(96, 160)
+    with printer:
+        printer.print_raster(raster, wait=False)
+    sent = bytes(transport.buf)
+    assert sent.endswith(raster.data + bytes.fromhex("1b6417"))
+    assert sent.count(bytes.fromhex("1b64")) == 1
+
+
+def test_a_continuous_strip_is_one_frame_and_one_feed():
+    printer, transport, _ = _printer(inter_packet_delay_s=0, pace_factor=0, paper_type=PAPER_CONTINUOUS)
+    labels = [Image.new("L", (mm_to_px(40), mm_to_px(12)), 255) for _ in range(3)]
+    raster = to_device(concat_strip(labels, 2.0))
+    with printer:
+        printer.print_raster(raster, wait=False)
+    sent = bytes(transport.buf)
+    assert len(find_frames(sent)) == 1
+    assert sent.count(bytes.fromhex("1b6417")) == 1
+
+
+def test_die_cut_frames_are_not_fed():
+    """On die-cut stock the printer aligns to the gap itself; an explicit feed is noise."""
+    printer, transport, _ = _printer(inter_packet_delay_s=0, pace_factor=0, paper_type=PAPER_GAP)
+    with printer:
+        printer.print_raster(_blank(96, 160), wait=False)
+    assert bytes.fromhex("1b64") not in bytes(transport.buf)
+
+
+def test_the_feed_length_is_configurable_and_zero_disables_it():
+    printer, transport, _ = _printer(
+        inter_packet_delay_s=0, pace_factor=0, paper_type=PAPER_CONTINUOUS, feed_lines=80
+    )
+    with printer:
+        printer.print_raster(_blank(96, 32), wait=False)
+    assert bytes(transport.buf).endswith(bytes.fromhex("1b6450"))
+
+    off, t_off, _ = _printer(
+        inter_packet_delay_s=0, pace_factor=0, paper_type=PAPER_CONTINUOUS, feed_lines=0
+    )
+    with off:
+        off.print_raster(_blank(96, 32), wait=False)
+    assert bytes.fromhex("1b64") not in bytes(t_off.buf)
+
+
+def test_a_bad_tape_type_or_feed_is_refused_at_construction():
+    with pytest.raises(ValueError, match="paper_type"):
+        D30Config(paper_type=0x26)
+    with pytest.raises(ValueError, match="feed_lines"):
+        D30Config(feed_lines=256)
+
+
+def test_the_completion_wait_covers_the_feed():
+    """``0x0F`` lands ~4.6s after the last byte when the frame ends in ``ESC d 23``.
+
+    Measured on fw 2.1.2 against a 160-line label. At the die-cut margin (3.5s) the wait
+    would give up first and the connection would close mid-feed.
+    """
+    transport = FakeTransport()
+    elapsed = 0.0
+    printer = PhomemoD30(
+        transport,
+        D30Config(pace_factor=0.0, paper_type=PAPER_CONTINUOUS),
+        sleep=lambda s: _advance(s),
+    )
+
+    def _advance(s: float) -> None:
+        nonlocal elapsed
+        elapsed += s
+        if elapsed >= 4.6 and printer.feedback.prints_completed == 0:
+            transport.inject(bytes.fromhex("1a0f0c"))
+
+    printer.connect()
+    transport.inject(bytes.fromhex("1a0689"))
+    printer.print_raster(_blank(96, 160))
+    assert printer.feedback.prints_completed == 1

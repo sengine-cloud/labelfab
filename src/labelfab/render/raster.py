@@ -83,12 +83,20 @@ def compose(drawable, tape: TapeSpec, length_mm: float | str) -> Image.Image:
     return img
 
 
-def concat_strip(labels: list[Image.Image], separator_mm: float = 2.0) -> Image.Image:
+def concat_strip(
+    labels: list[Image.Image], separator_mm: float = 2.0, *, bookends: bool = False
+) -> Image.Image:
     """Join landscape labels end to end into a single strip.
 
     This is what makes strip mode worth having: one raster means one leader and one
     trailer feed for the whole batch instead of one per label. A thin tick line in
     each separator marks where to cut.
+
+    ``bookends=True`` frames the strip with a separator at each end, so the first and
+    last things the head prints are cut marks rather than a label's own margin or blank
+    padding. The tape already past the head when a print starts (what the previous
+    print's feed left) cannot be pulled back; cutting at the opening tick is what leaves
+    it off the strip, and the closing tick marks the cut at the other end.
     """
     if not labels:
         raise ValueError("cannot build a strip from zero labels")
@@ -97,19 +105,24 @@ def concat_strip(labels: list[Image.Image], separator_mm: float = 2.0) -> Image.
 
     sep = mm_to_px(separator_mm)
     height = labels[0].height
-    total = sum(im.width for im in labels) + sep * (len(labels) - 1)
+    separators = len(labels) + 1 if bookends else len(labels) - 1
+    total = sum(im.width for im in labels) + sep * separators
 
     strip = Image.new("L", (total, height), color=255)
     draw = ImageDraw.Draw(strip)
-    x = 0
+
+    def _separator(at: int) -> int:
+        if sep >= 3:
+            tick = at + sep // 2
+            draw.line([(tick, 0), (tick, height - 1)], fill=0, width=1)
+        return at + sep
+
+    x = _separator(0) if bookends else 0
     for i, im in enumerate(labels):
         strip.paste(im, (x, 0))
         x += im.width
-        if i < len(labels) - 1:
-            if sep >= 3:
-                tick = x + sep // 2
-                draw.line([(tick, 0), (tick, height - 1)], fill=0, width=1)
-            x += sep
+        if i < len(labels) - 1 or bookends:
+            x = _separator(x)
     return strip
 
 

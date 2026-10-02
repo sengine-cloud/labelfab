@@ -22,10 +22,11 @@ that prints one hardcoded label size. There is no maintained D30 library, so thi
 
 ## What it does differently
 
-**One strip, not N labels.** The print head sits behind the exit slot, so every separate
-print job wastes a leader and a trailer feed — easily 50% of a 40mm label. labelfab
-buffers jobs for a short window and emits the batch as a *single* `GS v 0` frame, paying
-that overhead once instead of once per label. A 20-label batch is one 6400-line raster.
+**One strip, not N labels.** The print head sits behind the exit slot, so each print ends
+in a feed that carries the printed edge out to be torn off, and costs a connection, a
+setup and a completion wait. labelfab buffers jobs for a short window and emits the batch
+as a *single* `GS v 0` frame, paying that once instead of once per label. A 20-label
+batch is one 6400-line raster.
 
 **The agent renders.** Producers send `{"preset": "stock_item", "vars": {...}}`, not a
 bitmap. Layout lives in one place, works offline, and changing where the QR sits does not
