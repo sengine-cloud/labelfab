@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 
 from PIL import Image
 
 from labelfab.contract import Box, LabelSpec, PrintJob, TapeSpec
 from labelfab.render import presets as _presets
+from labelfab.render import vertical as _vertical
 from labelfab.render.elements import build
 from labelfab.render.errors import (
     BarcodeTooWide,
@@ -17,7 +19,14 @@ from labelfab.render.errors import (
     RenderError,
     UnknownPreset,
 )
-from labelfab.render.raster import DeviceRaster, compose, concat_strip, to_bilevel, to_device
+from labelfab.render.raster import (
+    DeviceRaster,
+    compose,
+    compose_portrait,
+    concat_strip,
+    to_bilevel,
+    to_device,
+)
 
 __all__ = [
     "BarcodeTooWide",
@@ -29,6 +38,7 @@ __all__ = [
     "RenderError",
     "UnknownPreset",
     "compose",
+    "compose_portrait",
     "concat_strip",
     "rasterise",
     "render_job",
@@ -48,12 +58,28 @@ class RenderConfig:
     rotation: int = 270
     mirror: bool = False
     separator_mm: float = 2.0
+    #: Preset renames applied before lookup, so a producer that always asks for
+    #: ``stock_item`` can be given the vertical layout from the agent's config alone.
+    preset_aliases: Mapping[str, str] = field(default_factory=dict)
+    #: Put the top of a vertical label at the trailing end of the strip instead of the leading one.
+    vertical_flip: bool = False
+
+
+def _preset(label: LabelSpec, cfg: RenderConfig) -> str | None:
+    """The preset to render, after the agent's aliases."""
+    if label.preset is None:
+        return None
+    return cfg.preset_aliases.get(label.preset, label.preset)
+
+
+def _context(cfg: RenderConfig) -> _presets.PresetContext:
+    return _presets.PresetContext(qr_base_url=cfg.qr_base_url, qr_quiet_zone=cfg.qr_quiet_zone)
 
 
 def _tree(label: LabelSpec, cfg: RenderConfig) -> Box:
-    if label.preset is not None:
-        ctx = _presets.PresetContext(qr_base_url=cfg.qr_base_url, qr_quiet_zone=cfg.qr_quiet_zone)
-        return _presets.get(label.preset)(label.vars, ctx)
+    name = _preset(label, cfg)
+    if name is not None:
+        return _presets.get(name)(label.vars, _context(cfg))
     children = list(label.elements or [])
     if len(children) == 1 and isinstance(children[0], Box):
         return children[0]
@@ -67,6 +93,12 @@ def render_label(
 ) -> Image.Image:
     """Render one label to a landscape greyscale image (x along the tape)."""
     cfg = cfg or RenderConfig()
+    name = _preset(label, cfg)
+    if name in _vertical.PRESETS:
+        # A vertical label is as long as its content. The agent's pinned tape length is
+        # the horizontal layouts' fixed pitch and would not fit four stacked lines.
+        drawable = _vertical.PRESETS[name](label.vars, _context(cfg))
+        return compose_portrait(drawable, tape, label.length_mm, flip=cfg.vertical_flip)
     length = label.length_mm if label.length_mm != "auto" else tape.length_mm
     return compose(build(_tree(label, cfg)), tape, length)
 

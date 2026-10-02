@@ -42,6 +42,17 @@ def test_a_strip_on_the_wire_is_framed_by_separators(harness):
     assert ink[-2] < img.width - sep, "...with the last label's ink before the final separator"
 
 
+def test_the_workers_renderer_carries_the_configured_aliases(harness):
+    """InvenTree always asks for ``stock_item``; the alias is how the agent's config
+    turns that into the vertical layout without touching the producer."""
+    h = harness()
+    h.config.render.preset_aliases = {"stock_item": "stock_item_vertical"}
+    h.config.render.vertical_flip = True
+    cfg = h.worker._render_cfg()
+    assert dict(cfg.preset_aliases) == {"stock_item": "stock_item_vertical"}
+    assert cfg.vertical_flip is True
+
+
 def test_size_trigger_flushes_without_explicit_flush(harness):
     h = harness(max_labels=2, max_length_mm=10_000)
     h.submit(make_job("j", n_labels=2))  # no flush; count trigger fires

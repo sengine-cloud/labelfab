@@ -177,6 +177,12 @@ class RenderSection(BaseModel):
     #: it back to 3px, with the code physically larger than a bare one at 4.
     qr_quiet_zone: int = Field(default=4, ge=1, le=8)
     threshold: int = Field(default=128, ge=0, le=255)
+    #: Preset renames, e.g. ``{stock_item = "stock_item_vertical"}`` to print every
+    #: InvenTree stock label standing up without touching the producer.
+    preset_aliases: dict[str, str] = Field(default_factory=dict)
+    #: Put the top of a vertical label at the trailing end of the strip. Default: the
+    #: leading end, so it reads upright held with the leading end up.
+    vertical_flip: bool = False
 
 
 class SpoolSection(BaseModel):
