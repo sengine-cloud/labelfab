@@ -37,7 +37,10 @@ LINE_GAP_PX = 1
 
 INV_PT = (5.0, 11.0)  # (min, max): the INV code, bold, shrunk until it fits the width
 IPN_PT = (5.0, 9.0)  # the part number, regular
-DESC_PT = (4.0, 5.5)  # the description: one line, shrunk to fit, then cut with an ellipsis
+#: The description: one line, shrunk to fit, then cut with an ellipsis. The floor is 4.5pt
+#: (13px) because below it the printer's 1-bit threshold fills in the counters of o and e:
+#: at 4pt (11px) "iPod touch" prints as "iPcd tcuch".
+DESC_PT = (4.5, 5.5)
 
 _ELLIPSIS = "…"
 

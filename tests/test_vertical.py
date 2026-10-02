@@ -90,6 +90,13 @@ def test_a_description_that_cannot_fit_is_cut_with_an_ellipsis():
     assert font.getlength(text) <= TEXT_W
 
 
+def test_the_description_floor_keeps_small_letters_open_at_one_bit():
+    """Below 13px the 1-bit threshold fills in the counters of o and e ("iPod" -> "iPcd")."""
+    from labelfab.render.fonts import pt_to_px
+
+    assert pt_to_px(DESC_PT[0]) >= 13
+
+
 def test_a_short_description_keeps_the_larger_size():
     short, _ = fit_line("iPhone 5s", bold=False, condensed=True, width=TEXT_W, pt_range=DESC_PT)
     long_, _ = fit_line(
