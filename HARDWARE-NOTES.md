@@ -185,6 +185,10 @@ the printer "die-cut" while a continuous roll was loaded. In that state:
 | `ESC @` + raster + `ESC d 23` (vendor continuous bytes) | die-cut (`0a`) | same runaway |
 | `1f110b`, density, `ESC @`, raster, `ESC d 23` | continuous (`0b`) | `print_complete` ~4.6s after the last byte, about 2 cm of padding, stops by itself |
 
+The tape type does not survive a power cycle: a printer switched off and on read back
+`label_type` 10 (die-cut) until the agent connected and sent `1f110b`. So it has to be sent
+on every connection, which `session_setup` and the frame preamble both do.
+
 The runaway was the printer behaving correctly for the tape type it had been told.
 `label_type` read back 10 before and 11 after the set. A 3-label strip went through
 the agent as one frame (`printed=1`) with the type set from `[tape] kind`, and came out

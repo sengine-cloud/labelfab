@@ -226,8 +226,10 @@ AUTO_SHUTDOWN_TIME = Command(
 AUTO_POWER_NEVER = 0
 PRINT_SPEED = Command("PRINT_SPEED", _ctrl(0x23), R, Danger.STATEFUL, args=1)
 #: ``1F 11 <n>`` -- the *value* is the final opcode byte, so ``PAPER_TYPE(0x0B)`` is
-#: ``1F 11 0B``. The printer stores it and reports it back as ``LABEL_TYPE`` (``1A 0C n``).
-#: Decompiled from ``QuinPrinter.setPaperType``; read back on hardware (10 -> 11).
+#: ``1F 11 0B``. The printer holds it and reports it back as ``LABEL_TYPE`` (``1A 0C n``).
+#: Decompiled from ``QuinPrinter.setPaperType``; read back on hardware (10 -> 11). It does
+#: not survive a power cycle: a printer switched off and on read 10 (die-cut) again, which
+#: is why it is sent on every connect and not once.
 PAPER_TYPE = Command("PAPER_TYPE", CTRL, V, Danger.STATEFUL, args=1)
 SET_POWER_KEY_TYPE = Command("SET_POWER_KEY_TYPE", _cfg(0x25), R, Danger.STATEFUL, args=1)
 SHUTDOWN = Command("SHUTDOWN", _ctrl(0x42), D, Danger.STATEFUL, note="remote power off")
