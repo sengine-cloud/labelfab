@@ -23,6 +23,25 @@ def test_strip_is_one_frame(harness):
     assert h.spool.printed_labels("j") == {0, 1, 2}
 
 
+def test_a_strip_on_the_wire_is_framed_by_separators(harness):
+    """What the head prints first and last are cut ticks, one separator long each; the
+    labels' own ink sits between them. The frame is the labels plus a separator at each
+    end and between."""
+    from labelfab.contract import mm_to_px
+    from labelfab.device import decode
+
+    h = harness()
+    h.submit(make_job("j", n_labels=3, flush=True))
+    img = decode(bytes(h.last_transport.buf))  # landscape, ink = dark
+
+    sep = mm_to_px(2.0)
+    ink = [x for x in range(img.width) if any(img.getpixel((x, y)) < 128 for y in range(img.height))]
+    assert ink[0] == sep // 2, "the very first ink is the opening cut tick"
+    assert ink[1] > sep, "...and the first label's own ink starts after the separator"
+    assert ink[-1] == img.width - sep + sep // 2, "the last ink is the closing cut tick"
+    assert ink[-2] < img.width - sep, "...with the last label's ink before the final separator"
+
+
 def test_size_trigger_flushes_without_explicit_flush(harness):
     h = harness(max_labels=2, max_length_mm=10_000)
     h.submit(make_job("j", n_labels=2))  # no flush; count trigger fires

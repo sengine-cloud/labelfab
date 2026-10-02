@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from conftest import Clock
 
 from labelfab.agent import Coalescer, PendingLabel
@@ -28,6 +29,16 @@ def test_length_trigger():
     assert not c.is_full()
     c.add(_label(length_mm=20), 12.0)  # 10 + 2 sep + 20 > 25
     assert c.is_full()
+
+
+def test_length_counts_the_separators_that_frame_the_strip():
+    """The strip is printed with a separator at each end and between labels, so the
+    length trigger, which guards the 16-bit frame height, must count all of them."""
+    c = Coalescer(separator_mm=2.0, clock=Clock())
+    c.add(_label(length_mm=10), 12.0)
+    assert c.length_mm() == pytest.approx(10.0 + 2 * 2.0, abs=0.1)
+    c.add(_label(length_mm=10), 12.0)
+    assert c.length_mm() == pytest.approx(10.0 + 10.0 + 3 * 2.0, abs=0.1)
 
 
 def test_idle_trigger():

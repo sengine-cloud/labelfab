@@ -141,6 +141,28 @@ def test_strip_draws_a_cut_tick_between_labels_but_not_at_the_ends():
     assert 40 < next(iter(columns_with_ink)) < 40 + mm_to_px(2.0)
 
 
+def test_bookends_frame_the_strip_with_cut_ticks():
+    """Strip mode starts and ends with the separator: the first and last ink the head
+    lays down are cut marks, with no blank padding of ours outside them."""
+    strip = concat_strip([_canvas(40, 32), _canvas(40, 32)], 2.0, bookends=True)
+    sep = mm_to_px(2.0)
+    assert strip.width == 40 + 40 + sep * 3  # a separator at each end and between
+
+    ink = sorted(x for x in range(strip.width) if any(strip.getpixel((x, y)) == 0 for y in range(32)))
+    assert len(ink) == 3, "opening tick, the tick between the labels, closing tick"
+    assert ink[0] < sep, "the first thing printed is the tick, not a label margin"
+    assert sep + 40 < ink[1] < sep + 40 + sep
+    assert strip.width - sep < ink[2] < strip.width, "the last thing printed is the closing tick"
+
+
+def test_a_single_label_strip_is_framed_too():
+    strip = concat_strip([_canvas(40, 32)], 2.0, bookends=True)
+    sep = mm_to_px(2.0)
+    assert strip.width == 40 + 2 * sep
+    assert strip.getpixel((sep // 2, 0)) == 0  # opening tick
+    assert strip.getpixel((sep + 40 + sep // 2, 0)) == 0  # closing tick
+
+
 def test_strip_refuses_mismatched_tape_widths():
     with pytest.raises(ValueError, match="share the tape width"):
         concat_strip([_canvas(40, 96), _canvas(40, 120)])

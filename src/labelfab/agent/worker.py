@@ -339,7 +339,7 @@ class PrintWorker:
             self._print_strip(batch)
 
     def _print_strip(self, batch: Batch) -> None:
-        strip = concat_strip(batch.images, self.config.strip.separator_mm)
+        strip = concat_strip(batch.images, self.config.strip.separator_mm, bookends=True)
         raster = to_device(
             strip,
             rotation=self.config.tape.rotation,

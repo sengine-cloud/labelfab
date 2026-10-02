@@ -82,7 +82,8 @@ class Coalescer:
         if not self._pending:
             return 0.0
         px = sum(pl.image.width for pl in self._pending)
-        seps = self.separator_mm * (len(self._pending) - 1)
+        # A separator before every label plus one closing the strip (concat_strip bookends).
+        seps = self.separator_mm * (len(self._pending) + 1)
         return px / PX_PER_MM + seps
 
     def add(self, label: PendingLabel, width_mm: float) -> None:

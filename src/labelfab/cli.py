@@ -42,9 +42,10 @@ def _build(args) -> Image.Image:
     job = _load_job(args.job)
     cfg = _config(args)
     images = render_job(job, cfg)
-    if args.discrete or len(images) == 1:
+    if args.discrete:
         return images[0] if len(images) == 1 else concat_strip(images, cfg.separator_mm)
-    return concat_strip(images, cfg.separator_mm)
+    # A strip is framed by separators, even for one label: that is what the agent prints.
+    return concat_strip(images, cfg.separator_mm, bookends=True)
 
 
 def _ansi(img: Image.Image, scale: int) -> str:
