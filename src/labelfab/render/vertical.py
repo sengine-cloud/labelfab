@@ -37,12 +37,16 @@ LINE_GAP_PX = 1
 
 INV_PT = (5.0, 11.0)  # (min, max): the INV code, bold, shrunk until it fits the width
 IPN_PT = (5.0, 9.0)  # the part number, regular
-#: The description: one line, shrunk to fit, then cut with an ellipsis. The floor is 4.5pt
-#: (13px) because below it the printer's 1-bit threshold fills in the counters of o and e:
-#: at 4pt (11px) "iPod touch" prints as "iPcd tcuch".
-DESC_PT = (4.5, 5.5)
+#: The description: one line at a fixed size, so every label reads alike, cut at a word
+#: boundary when it does not fit. 5pt is 14px; below 13px the printer's 1-bit threshold
+#: fills in the counters of o and e ("iPod touch" printed as "iPcd tcuch" at 4pt).
+DESC_PT = (5.0, 5.0)
 
-_ELLIPSIS = "…"
+#: Punctuation left dangling at a cut reads as a half-finished thought: "iPod touch (...".
+_DANGLING = " ([{<-–—,;:/·|&+"
+
+#: Two dots, not the three of an ellipsis: on a 12mm column every pixel of width is a letter.
+_CUT = ".."
 
 
 def scaled_qr(payload: str, width_px: int, quiet_modules: int) -> Image.Image:
@@ -83,13 +87,34 @@ def scaled_qr(payload: str, width_px: int, quiet_modules: int) -> Image.Image:
     return img
 
 
+def smart_cut(text: str, font: ImageFont.FreeTypeFont, width: int) -> str:
+    """``text`` if it fits, else its longest whole-word prefix that fits with a two-dot mark.
+
+    "iPod touch (6th gen)" becomes "iPod touch..", not "iPod touch (..": punctuation left
+    dangling at the cut is dropped too. Only when not even the first word fits is it cut
+    mid-word, by characters.
+    """
+    if font.getlength(text) <= width:
+        return text
+    words = text.split()
+    for n in range(len(words) - 1, 0, -1):
+        head = " ".join(words[:n]).rstrip(_DANGLING)
+        if head and font.getlength(head + _CUT) <= width:
+            return head + _CUT
+    head = words[0] if words else ""
+    while head and font.getlength(head + _CUT) > width:
+        head = head[:-1]
+    return head.rstrip(_DANGLING) + _CUT
+
+
 def fit_line(
     text: str, *, bold: bool, condensed: bool, width: int, pt_range: tuple[float, float]
 ) -> tuple[ImageFont.FreeTypeFont, str]:
     """The largest size in ``pt_range`` at which ``text`` fits on one line.
 
-    If it does not fit even at the smallest size, it is cut and ends in an ellipsis.
+    If it does not fit even at the smallest size, it is cut there (see ``smart_cut``).
     A code is never wrapped or split: ``INV-PA39`` stays one token or the size drops.
+    A range with equal ends is a fixed size.
     """
     lo, hi = pt_range
     for size in range(pt_to_px(hi), pt_to_px(lo) - 1, -1):
@@ -97,9 +122,7 @@ def fit_line(
         if font.getlength(text) <= width:
             return font, text
     font = load_font(bold=bold, condensed=condensed, size_px=pt_to_px(lo))
-    while text and font.getlength(text + _ELLIPSIS) > width:
-        text = text[:-1]
-    return font, text.rstrip() + _ELLIPSIS
+    return font, smart_cut(text, font, width)
 
 
 def _ink_box(font: ImageFont.FreeTypeFont) -> tuple[int, int]:

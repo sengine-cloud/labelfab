@@ -15,6 +15,7 @@ from labelfab.render.vertical import (
     SIDE_PAD_PX,
     fit_line,
     scaled_qr,
+    smart_cut,
     stock_item_vertical,
 )
 
@@ -85,7 +86,7 @@ def test_a_description_that_cannot_fit_is_cut_with_an_ellipsis():
     font, text = fit_line(
         "Apple iPod classic 6th generation", bold=False, condensed=True, width=TEXT_W, pt_range=DESC_PT
     )
-    assert text.endswith("…")
+    assert text.endswith("..")
     assert "\n" not in text
     assert font.getlength(text) <= TEXT_W
 
@@ -97,12 +98,46 @@ def test_the_description_floor_keeps_small_letters_open_at_one_bit():
     assert pt_to_px(DESC_PT[0]) >= 13
 
 
-def test_a_short_description_keeps_the_larger_size():
+def test_every_description_is_the_same_size_however_long():
+    """A fixed size: a short description is not blown up next to a long one."""
     short, _ = fit_line("iPhone 5s", bold=False, condensed=True, width=TEXT_W, pt_range=DESC_PT)
     long_, _ = fit_line(
         "Apple iPod classic 6th generation", bold=False, condensed=True, width=TEXT_W, pt_range=DESC_PT
     )
-    assert short.size > long_.size
+    assert short.size == long_.size
+
+
+def test_a_long_description_is_cut_at_a_word_not_in_the_middle_of_one():
+    _, text = fit_line(
+        "iPod touch (6th gen)", bold=False, condensed=True, width=TEXT_W, pt_range=DESC_PT
+    )
+    assert text == "iPod touch.."
+
+
+class _Mono:
+    """5px per character, so the cut points in these tests are plain arithmetic."""
+
+    @staticmethod
+    def getlength(text: str) -> float:
+        return 5.0 * len(text)
+
+
+def test_smart_cut_leaves_text_that_fits_alone():
+    assert smart_cut("iPhone 5s", _Mono, 100) == "iPhone 5s"
+    assert smart_cut("", _Mono, 10) == ""
+
+
+def test_smart_cut_keeps_whole_words():
+    assert smart_cut("iPod touch (6th gen)", _Mono, 60) == "iPod touch.."
+
+
+def test_smart_cut_drops_punctuation_left_dangling():
+    assert smart_cut("alpha beta - gamma", _Mono, 60) == "alpha beta.."
+    assert smart_cut("Lumia 1020 yellow, Nokia", _Mono, 95) == "Lumia 1020 yellow.."
+
+
+def test_smart_cut_only_splits_a_word_when_the_first_one_alone_is_too_wide():
+    assert smart_cut("supercalifragilistic stuff", _Mono, 40) == "superc.."
 
 
 # --------------------------------------------------------------------------- #
