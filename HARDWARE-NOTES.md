@@ -22,14 +22,16 @@ Sources, in descending order of authority:
    `~/Documents/quyin-printer-protocol.md`. That document is the opcode reference;
    this one is what the hardware actually did.
 3. `polskafan/phomemo_d30` — the original constants. Still correct, now explained.
+4. **Teardown photos** — `~/Documents/d30-teardown/` (2026-10-02). The only source for
+   what is physically on the board; see "Inside".
 
 `vivier/phomemo-tools` does **not** support this printer. It targets the
 M02/M02Pro/M02S/M110/M120/M220/T02 family. Useful only as an ESC/POS raster reference.
 
 ## This unit
 
-Read live off the printer (`1f1109` / `1f1107` / `1f1108`), identically over both
-transports:
+Read live off the printer (`1f1109` / `1f1107` / `1f1108` / `1f1138`), identically over
+both transports:
 
 | | |
 |---|---|
@@ -37,6 +39,7 @@ transports:
 | Model | SN prefix `Q223` → **D30** (vendor `DefaultPrinter.json`, 237 records) |
 | Consumable DRM | **`paperEncrypt: false`** — third-party tape will feed ✅ |
 | Firmware | **2.1.2** |
+| Bluetooth chip | **JieLi AC6956C** — `CHIP_TYPE` → `03` (JieLi) and the chip marking agree ✅ (see "Inside") |
 | MAC | `AA:FD:FD:6B:9F:5F` (public) |
 | Class of Device | `0x100680` → major `0x06` Imaging, minor bit `0x80` **Printer** |
 
@@ -50,6 +53,148 @@ transports:
 | Print width | **96 dots = 12 bytes** ✅ (`D30Printer.MAX_PRINT_WIDTH`, hardcoded, confirmed on the wire) |
 | Transport | **Dual-mode.** Classic SPP ✅ *and* BLE GATT ✅ |
 | Read channel | **Exists.** Answers every query *and* pushes unsolicited status ✅ |
+
+## Inside — board and battery (opened 2026-10-02)
+
+Read off part markings and labels in five photos, and checked against datasheets wherever
+a marking was legible. Nothing was probed electrically, so pin-level roles are inferred
+from placement. Originals and two annotated maps (`board-top-annotated.jpg`,
+`board-bottom-annotated.jpg`) are in `~/Documents/d30-teardown/`, with the AC6956C and
+SS8833T datasheets in `datasheets/` beside them.
+
+| | |
+|---|---|
+| Board | **`Q138_A`**, with `231229` beside it (probably the layout date). Fab is WMD Circuits, Shenzhen (`WMD-D`, UL `E353931`), date stamp `4024` |
+| Bluetooth | **JieLi AC6956C** (BR23 family) — Bluetooth 5.1 BR/EDR + BLE, QFN-32, 4 Mbit flash, 24 MHz crystal, PCB trace antenna |
+| Charger | **LGS4056H** (Legend-Si) — linear, up to 1 A, CV at **4.2 V**, fed from the micro-USB |
+| Motor driver | **SS8833T** (Leadpower) — dual H-bridge, 2.7–15 V, 1 A per bridge; DRV8833-class |
+| Motor | bipolar stepper — 4 wires to the dual H-bridge, on a 6-position connector |
+| Battery | one **18490** Li-ion cell, 1200 mAh, 3.7 V nominal, **4.2 V charge limit** |
+
+### The Bluetooth SoC is a JieLi AC6956C ✅
+
+U1's marking, too faint for the photos and read off the chip as `JL` / `BP27477-56C4`,
+follows JieLi's usual scheme ([kagaimiq/jielie](https://kagaimiq.github.io/jielie/chips/chip-marks.html)):
+`BP27477` is the lot, and after the dash `56` is the series (AC69**56**), `C` the variant
+and `4` the flash size in Mbit. The scheme's own example `BP09766-26A4` → AC6926A has the
+same shape, and AC69x6 parts are the QFN32 ones, which U1 is. Per its datasheet the chip
+is a Bluetooth 5.1 **BR/EDR + BLE** SoC with SPP and GATT in its profile list: a 32-bit
+DSP at up to 240 MHz, built for Bluetooth speakers and rated to run straight off a
+Li-ion cell (VBAT 2.2–5.5 V).
+
+With one antenna on the board, Classic SPP and BLE (see "Transport") both come from this
+one chip.
+
+`CHIP_TYPE` agrees on the family. It answers `1a17 03` on both transports, and what `03`
+meant was not known. The vendor parser's branch for tag `0x17` comes down to:
+
+```java
+PrinterInfo.bluetoothType = b == 3 || b == 7 || b == 8;
+```
+
+In `QuinPrinter` that flag picks the firmware-update routine: `updateForJerry`, which
+logs `启动固件升级——杰里蓝牙` ("start firmware upgrade — JieLi Bluetooth"), or
+`updateForNormal`, logged as legacy Bluetooth (`旧版蓝牙`). So 3, 7 and 8 are JieLi chip
+types: the protocol and the marking give the same answer independently. The code is
+`QuinPrinter` in `classes14.dex` of the vendor `base.apk`
+(`~/Documents/com.project.aimotech.printmaster.zip`).
+
+### The board is `Q138`; the serial says `Q223`
+
+`Q138` is also one of the 20 D30 serial prefixes in `DefaultPrinter.json`, with a record
+identical to `Q223`'s apart from the product image. So the serial prefix does not name
+the board: this `Q223` unit carries a `Q138` board.
+
+### The USB port reaches the SoC, and the ROM has a download mode ✅
+
+`J2` (the micro-USB) is **not charge-only**. Power goes to the `U5` charger, but the two
+data lines run to **U1 pins 23/24** — `USBDM` (D−) and `USBDP` (D+) — verified by tracing
+them on the board (the traces run under the assembly sticker, which is what hid them at
+first). So `J2` is a full USB data port into the AC6956C's own USB controller.
+
+Pin geography, confirmed against the datasheet package diagram
+(`~/Documents/d30-teardown/AC6956C-pinout.png`): the pin-1 dot is top-left, so the right
+edge top→bottom is `24 USBDP` (D+, the corner leg), `23 USBDM` (D−), then `PC2`–`PC5`,
+then `18/17 BT_OSC0/OSCI` at the bottom — which is where the 24 MHz crystal sits, the
+cross-check that the edge is the right way round.
+
+The AC6956C, like other JieLi parts, has a **USB download mode in its boot ROM** — the
+vendor's DFU equivalent, called "UBOOT" (`UBOOT1.00` in the mask ROM on this BR23-class
+part). It is the interface the factory flashes through, and `J2` physically reaches it.
+
+To interact with it you need, in principle:
+
+- **USB access** — already present via `J2`; a plain cable/breakout, no soldering to the
+  vias.
+- **A host tool.** Public options: JieLi's official USB downloader that ships with
+  [`fw-AC63_BT_SDK`](https://github.com/Jieli-Tech/fw-AC63_BT_SDK) (Windows, sanctioned
+  path, knows this chip), or the open-source cross-platform
+  [`kagaimiq/jl-uboot-tool`](https://github.com/kagaimiq/jl-uboot-tool) (its README lists
+  BR23 / AC695N–AC635N as working).
+- **A way to enter the mode** — triggered by a signal on D+/D− at power-on (the factory
+  uses a small "USB-KEY" dongle), and the ROM also drops into it when the flash holds no
+  valid firmware. Mechanism documented in [`kagaimiq/jielie`](https://github.com/kagaimiq/jielie)
+  under `isp/usb/usb-key` and `docs/how-to-enter-uboot`.
+
+**Caveat — raw access is not readable contents.** BR23-generation parts wrap the loader
+protocol in JieLi's "MengLi" obfuscation, and the flash is scrambled on the fly by the
+chip's SFC/ENC engine with a per-device key. Reaching UBOOT is one thing; getting
+intelligible firmware back is gated by that key scheme. It is publicly documented (the
+`kagaimiq/jielie` cipher / ENC / SFC pages), but it is why this is not a plain "read it
+like an SPI flash" job. None of the download path has been exercised on this unit — only
+the USB routing is confirmed.
+
+### Battery
+
+| | |
+|---|---|
+| Cell | 18490 (`1INR19/50`), 1200 mAh typical, 3.7 V nominal, 4.44 Wh, GB 31241-2022 |
+| Charge limit | 4.2 V, matching the LGS4056H's default CV setpoint |
+| Made | 2024-11-30 by DongGuan XinKeDa Energy; label QR `XK241130BA11286` |
+| Plug | 3-pin, into `BT1`. The label documents only + (red) and − (black); the third contact is not traced |
+
+That pins the top of the `VOLTAGE` scale: 4.2 V is full, which puts the 4.16–4.17 V
+read on charge (2026-07-30) near the top. The empty end is not on the label and has not
+been measured, so mapping voltage to a percentage still needs one discharge run.
+
+### Parts by reference
+
+Bottom side (`IMG_7188`–`7190`):
+
+| Ref | Part | Notes |
+|---|---|---|
+| `U1` | JieLi AC6956C, QFN-32 | marking `BP27477-56C4` |
+| `Y2` | 24.000 MHz crystal | U1's clock |
+| — | PCB meander antenna | matching footprint `L1`/`L2`/`C3`; `L1` fitted as 0 Ω |
+| `U5` | LGS4056H, SOP-8 | |
+| `U7` | SS8833T, ETSSOP-16 | second line `1215439` |
+| `R4`, `R6` | 0.82 Ω (`R820`) | probably U7's current-sense resistors (`ASEN`, `BSEN`) |
+| `L5`–`L8` | 0 Ω (`000`) | along U7's output pins |
+| `Q2` | AO3401 P-MOSFET (`A19T`) | |
+| `Q6`, and one beside `Q4` | 2N7002 N-MOSFET (`702`) | |
+| `U2`, `Q4`, `D1`, `D9` | SOT-23-5 / SOT-23 | markings illegible |
+| `S2` | tact switch, centred in a large circular outline | probably the case button |
+| `D7` | 4-pad LED, two dies visible | probably the status LED |
+| sticker | DataMatrix `2100032735_29373` | assembly trace code, not the device serial |
+
+Top side (`IMG_7187`; a black pad covers the middle):
+
+| Ref | Part | Notes |
+|---|---|---|
+| `J1` | 7-pin FPC | amber flex, presumably to the print head |
+| `P1`? | 6-position wire-to-board, 4 wires fitted | the stepper; label half hidden under the flex |
+| `J3` | 10-pin (2×5) part | under the motor harness, not identified |
+| `BT1` | 3-pin | battery |
+| `J2` | micro-USB | charging input **and** USB data: D−/D+ reach U1 pins 23/24 (see "The USB port reaches the SoC") |
+| `S1` | right-angle tact switch at the board edge beside `J2` | function not traced |
+
+### Not resolved by these photos
+
+- The markings on `U2`, `Q4`, `D1`, `D9`.
+- What `J3` is: it sits under the motor harness. Move the harness and reshoot.
+- Where `J1`'s flex ends, and whether the paper/gap sensor shares it with the head.
+- The battery plug's third contact. A thermistor is the usual reason for one.
+- What `S1` does, and whatever is under the black pad on the top side.
 
 ## Transport
 
@@ -260,7 +405,7 @@ Both apps open with the same query set. Android batches several into one write
 
 | Bytes | Meaning |
 |---|---|
-| `1f1138` | `CHIP_TYPE` |
+| `1f1138` | `CHIP_TYPE` — Bluetooth chip family (`03` = JieLi) |
 | `1f1112` | `COVER_STATE` |
 | `1f1113` | `HOT_STATE` |
 | `1f1109` | `SN` — drives model identification |
@@ -288,7 +433,7 @@ subcode.
 | `1f1111` PAPER_STATE | `1a06 89` | bitfield, see below |
 | `1f1119` LABEL_TYPE | `1a0c 0a` | |
 | `1f110e` AUTO_POWER_TIME | `1a09 <n>` | echoes the set value |
-| `1f1138` CHIP_TYPE | `1a17 03` | |
+| `1f1138` CHIP_TYPE | `1a17 03` | JieLi Bluetooth chip, see "Inside" |
 | `1f1112` COVER_STATE | `1a05 98` | |
 | `1f1113` HOT_STATE | `1a03 a8` | |
 | *(after a print)* | `1a0f 0c` | **print complete**, ~2.4 s after the raster |
