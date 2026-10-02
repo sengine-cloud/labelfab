@@ -81,6 +81,15 @@ qr_base_url = ""
 # survives a phone-camera read at 2. Leave it at 4 for a bare base.
 qr_quiet_zone = 4
 threshold = 128
+# Print InvenTree's stock labels standing up: QR across the whole 12mm, then the INV
+# code, the IPN and the first line of the description. Vertical labels are as long as
+# their content (the pinned [tape] length_mm does not apply to them); pair this with a
+# small [strip] separator_mm (0.5) so the cut ticks sit close to the label. Remove the
+# line to go back to the horizontal layout.
+# preset_aliases = { stock_item = "stock_item_vertical" }
+# Put the top of a vertical label at the trailing end of the strip instead of the
+# leading end (by default it reads upright with the leading end held up).
+# vertical_flip = false
 
 [spool]
 path = "/var/lib/labelfab/spool.db"

@@ -80,6 +80,18 @@ def test_the_trailing_feed_is_configurable_and_bounded(tmp_path):
         load(toml)
 
 
+def test_preset_aliases_load_from_toml(tmp_path):
+    toml = tmp_path / "agent.toml"
+    toml.write_text(
+        "[render]\npreset_aliases = { stock_item = 'stock_item_vertical' }\nvertical_flip = true\n"
+    )
+    cfg = load(toml)
+    assert cfg.render.preset_aliases == {"stock_item": "stock_item_vertical"}
+    assert cfg.render.vertical_flip is True
+    assert Config().render.preset_aliases == {}  # nothing is remapped unless asked
+    assert Config().render.vertical_flip is False
+
+
 def test_the_startup_probe_is_on_and_can_be_turned_off(tmp_path):
     """On by default because it cannot wake a sleeping printer, so the only cost of a
     miss is one connect timeout. The knob exists for hosts where that is in the way."""

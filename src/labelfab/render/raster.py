@@ -83,6 +83,37 @@ def compose(drawable, tape: TapeSpec, length_mm: float | str) -> Image.Image:
     return img
 
 
+def compose_portrait(
+    drawable, tape: TapeSpec, length_mm: float | str, *, flip: bool = False
+) -> Image.Image:
+    """Lay a drawable out upright across the tape, then turn it landscape.
+
+    The tape width is the label's width and the length runs down it, so the content reads
+    across the tape. The strip leaves the printer leading end first; by default the top
+    of the label is that end, so it reads upright held with the leading end up. ``flip``
+    puts the top at the other end.
+
+    ``length_mm == "auto"`` sizes the label to its content. A fixed length shorter than
+    the content is an error rather than a clipped label.
+    """
+    from labelfab.render.errors import LayoutOverflow
+
+    width_px = mm_to_px(tape.width_mm)
+    _, natural = drawable.measure(width_px, mm_to_px(MAX_AUTO_LENGTH_MM))
+    if length_mm == "auto":
+        length_px = max(1, natural)
+    else:
+        length_px = mm_to_px(float(length_mm))
+        if natural > length_px:
+            raise LayoutOverflow(
+                f"vertical label needs {natural / PX_PER_MM:.1f}mm but length_mm is "
+                f"{float(length_mm):.1f}; leave it at 'auto' or allow more"
+            )
+    img = canvas(width_px, length_px)
+    drawable.draw(img, ImageDraw.Draw(img), Rect(0, 0, width_px, length_px))
+    return img.transpose(Image.Transpose.ROTATE_270 if flip else Image.Transpose.ROTATE_90)
+
+
 def concat_strip(
     labels: list[Image.Image], separator_mm: float = 2.0, *, bookends: bool = False
 ) -> Image.Image:

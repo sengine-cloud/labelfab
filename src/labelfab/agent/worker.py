@@ -124,6 +124,8 @@ class PrintWorker:
             rotation=self.config.tape.rotation,
             mirror=self.config.tape.mirror,
             separator_mm=self.config.strip.separator_mm,
+            preset_aliases=self.config.render.preset_aliases,
+            vertical_flip=self.config.render.vertical_flip,
         )
 
     def _loaded_tape(self) -> TapeSpec:
