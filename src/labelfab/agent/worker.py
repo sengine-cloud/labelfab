@@ -197,7 +197,17 @@ class PrintWorker:
             self._finalize(job_id)
             return
 
-        discrete = job.options.batch_mode == "discrete" or tape.kind == "gap"
+        # Each print rolls about 8mm of tape before its first ink, so a frame per label
+        # pays that per label. On continuous tape a producer that asks for ``discrete``
+        # (the InvenTree plugin always does, from its die-cut days) gets one strip per
+        # job instead: all its labels in one frame, sent as soon as the job is queued.
+        # Die-cut tape cannot do this: a frame spanning gaps would print across them.
+        as_strip = (
+            tape.kind == "continuous"
+            and job.options.batch_mode == "discrete"
+            and self.config.strip.discrete_as_strip
+        )
+        discrete = (job.options.batch_mode == "discrete" and not as_strip) or tape.kind == "gap"
         if discrete:
             self._flush()  # preserve arrival order relative to any pending strip
             self._run_discrete(job_id, queued)
@@ -210,7 +220,7 @@ class PrintWorker:
             self.coalescer.add(PendingLabel(job_id, idx, image), width)  # type: ignore[arg-type]
             if self.coalescer.is_full():
                 self._flush()
-        if job.options.flush:
+        if job.options.flush or as_strip:
             self._flush()
         self._maybe_finalize(job_id)
 

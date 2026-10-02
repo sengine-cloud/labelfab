@@ -160,6 +160,12 @@ class StripSection(BaseModel):
     #: Flush once this many labels have accumulated.
     max_labels: int = Field(default=24, ge=1, le=200)
     separator_mm: float = 2.0
+    #: On continuous tape, print a job that asks for ``discrete`` as one strip: its labels
+    #: in a single frame, flushed as soon as the job is queued, rather than a frame per
+    #: label. Every print rolls ~8mm of tape before its first ink, so this pays that once
+    #: per job. Turn it off to honour ``discrete`` literally. Ignored on die-cut tape,
+    #: which always prints a frame per label.
+    discrete_as_strip: bool = True
 
 
 class RenderSection(BaseModel):

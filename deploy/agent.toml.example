@@ -68,6 +68,9 @@ mirror = false
 max_wait_s = 30.0
 max_length_mm = 300.0
 max_labels = 24
+# On continuous tape, print a job that asks for "discrete" as one strip (one frame, sent
+# as soon as the job is queued): each print rolls ~8mm of tape before its first ink.
+discrete_as_strip = true
 separator_mm = 2.0
 
 [render]
