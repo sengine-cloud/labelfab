@@ -23,6 +23,7 @@ from labelfab.agent.source_dir import DirSource
 from labelfab.agent.spool import Spool
 from labelfab.agent.worker import PrintWorker
 from labelfab.device.d30 import D30Config, PhomemoD30
+from labelfab.device.protocol import PAPER_CONTINUOUS, PAPER_GAP
 
 log = logging.getLogger("labelfab.agent")
 
@@ -34,6 +35,10 @@ def make_printer_factory(config: Config) -> Callable[[], PhomemoD30]:
         pace_factor=config.device.pace_factor,
         wake_dummy_feed=config.device.wake_dummy_feed,
         density=config.device.density,
+        # The printer stores this and acts on it: told die-cut, it feeds on after every
+        # print looking for a gap. The configured tape is the truth, so it decides.
+        paper_type=PAPER_CONTINUOUS if config.tape.kind == "continuous" else PAPER_GAP,
+        feed_lines=config.device.feed_lines,
     )
 
     def factory() -> PhomemoD30:

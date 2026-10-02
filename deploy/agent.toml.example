@@ -42,6 +42,9 @@ raster_width_px = 96         # 96 = 12mm head (verified); 120 = 15mm (day-1 hypo
 pace_factor = 1.2            # lower until a long strip garbles, then +50%
 density = 1                  # 1 light | 2 medium | 4 heavy; raise if codes misscan
 wake_dummy_feed = false
+# Lines fed after each frame on continuous tape (~8 lines/mm; 23 = the vendor's 2.9mm).
+# Raise it if the last label of a batch is still inside the printer when printing ends.
+feed_lines = 23
 # Survey the printer once at startup so the status topic carries live truth instead of
 # what was remembered from the last print. Cannot wake a sleeping unit, so a miss costs
 # one connect timeout and the stored status is published unchanged.
@@ -55,7 +58,8 @@ probe_interval_s = 0
 
 [tape]
 width_mm = 15.0
-kind = "continuous"          # continuous | gap (gap forces discrete mode)
+kind = "continuous"          # continuous | gap. Also sets the printer's stored tape type
+                             # (gap forces discrete mode)
 offset_px = 0                # letterbox a 96px head onto wider tape
 rotation = 270
 mirror = false

@@ -46,6 +46,40 @@ def test_density_defaults_to_light_and_reaches_the_driver():
     assert printer.config.density == 1
 
 
+def test_the_configured_tape_decides_the_tape_type_the_printer_is_told():
+    """The printer stores this and acts on it: told die-cut it feeds on after every print
+    hunting for a gap, which on a continuous roll runs the tape away. The agent used to
+    send the die-cut value on every connect whatever ``[tape] kind`` said."""
+    from labelfab.agent.__main__ import make_printer_factory
+    from labelfab.device.protocol import PAPER_CONTINUOUS, PAPER_GAP
+
+    cfg = Config()
+    cfg.device.transport = "fake"
+    assert cfg.tape.kind == "continuous"  # the shipped default
+    assert make_printer_factory(cfg)().config.paper_type == PAPER_CONTINUOUS
+
+    cfg.tape.kind = "gap"
+    assert make_printer_factory(cfg)().config.paper_type == PAPER_GAP
+
+
+def test_the_trailing_feed_is_configurable_and_bounded(tmp_path):
+    import pytest
+    from pydantic import ValidationError
+
+    from labelfab.agent.__main__ import make_printer_factory
+
+    assert Config().device.feed_lines == 23  # the vendor's own value
+
+    toml = tmp_path / "agent.toml"
+    toml.write_text("[device]\ntransport = 'fake'\nfeed_lines = 64\n")
+    cfg = load(toml)
+    assert make_printer_factory(cfg)().config.feed_lines == 64
+
+    toml.write_text("[device]\nfeed_lines = 300\n")
+    with pytest.raises(ValidationError):
+        load(toml)
+
+
 def test_the_startup_probe_is_on_and_can_be_turned_off(tmp_path):
     """On by default because it cannot wake a sleeping printer, so the only cost of a
     miss is one connect timeout. The knob exists for hosts where that is in the way."""

@@ -93,9 +93,6 @@ FIRMWARE_VERSION = Command("FIRMWARE_VERSION", _ctrl(0x07), V, note="-> 0x07, 3 
 BATTERY = Command("BATTERY", _ctrl(0x08), V, note="-> 0x04, percent")
 SERIAL = Command("SERIAL", _ctrl(0x09), V, note="-> 0x08, 15 ASCII; first 4 chars identify the model")
 AUTO_POWER_TIME = Command("AUTO_POWER_TIME", _ctrl(0x0E), V, note="-> 0x09, units of 5 minutes")
-UNKNOWN_0A = Command(
-    "UNKNOWN_0A", _ctrl(0x0A), V, note="sent once per print job by both vendor apps; meaning unknown"
-)
 PAPER_STATE = Command("PAPER_STATE", _ctrl(0x11), V, note="-> 0x06, bit0 = paper OK")
 COVER_STATE = Command("COVER_STATE", _ctrl(0x12), V, note="-> 0x05")
 HOT_STATE = Command("HOT_STATE", _ctrl(0x13), V, note="-> 0x03, 0xA8 = OK")
@@ -178,10 +175,29 @@ DENSITY_MEDIUM = 2
 DENSITY_HEAVY = 4
 DENSITIES = (DENSITY_LIGHT, DENSITY_MEDIUM, DENSITY_HEAVY)
 
+#: What kind of tape the printer believes is loaded. This was once the "unidentified
+#: ``1f110a``" that both vendor apps send before every print: it is ``PAPER_TYPE`` with
+#: the die-cut value. The vendor app sends ``0A`` for every label-stock type and ``0B``
+#: only for continuous; the printer stores it, and in gap mode it feeds on after a print
+#: looking for the next gap. The vendor app also knows ``0x26`` and ``0x4E`` for stocks
+#: this project does not drive, so they are not offered.
+PAPER_GAP = 0x0A
+PAPER_CONTINUOUS = 0x0B
+PAPER_TYPES = (PAPER_GAP, PAPER_CONTINUOUS)
+
+
+def _check_paper_type(paper_type: int) -> None:
+    if paper_type not in PAPER_TYPES:
+        raise ValueError(f"paper_type {paper_type:#04x} is not one of {PAPER_TYPES}")
+
+
 #: Feed after each label on the *continuous* path. The vendor sends ESC d 23, about
-#: 2.88mm at 203dpi. Unverified here: both captured jobs took the die-cut path.
+#: 2.88mm at 203dpi. Verified on continuous tape with the paper type set to
+#: ``PAPER_CONTINUOUS``; with the paper type left at ``PAPER_GAP`` the same byte makes
+#: the printer feed until it finds a die gap, which continuous tape never has, so the
+#: roll runs away until someone cuts the power.
 PRINT_AND_FEED = Command(
-    "PRINT_AND_FEED", b"\x1b\x64", D, args=1, note="ESC d n; vendor uses n=23 on continuous media"
+    "PRINT_AND_FEED", b"\x1b\x64", V, args=1, note="ESC d n; vendor uses n=23 on continuous media"
 )
 VENDOR_FEED_LINES = 23
 
@@ -209,7 +225,10 @@ AUTO_SHUTDOWN_TIME = Command(
 )
 AUTO_POWER_NEVER = 0
 PRINT_SPEED = Command("PRINT_SPEED", _ctrl(0x23), R, Danger.STATEFUL, args=1)
-PAPER_TYPE = Command("PAPER_TYPE", CTRL, R, Danger.STATEFUL, args=1)
+#: ``1F 11 <n>`` -- the *value* is the final opcode byte, so ``PAPER_TYPE(0x0B)`` is
+#: ``1F 11 0B``. The printer stores it and reports it back as ``LABEL_TYPE`` (``1A 0C n``).
+#: Decompiled from ``QuinPrinter.setPaperType``; read back on hardware (10 -> 11).
+PAPER_TYPE = Command("PAPER_TYPE", CTRL, V, Danger.STATEFUL, args=1)
 SET_POWER_KEY_TYPE = Command("SET_POWER_KEY_TYPE", _cfg(0x25), R, Danger.STATEFUL, args=1)
 SHUTDOWN = Command("SHUTDOWN", _ctrl(0x42), D, Danger.STATEFUL, note="remote power off")
 HEART_BEAT = Command(
@@ -295,18 +314,24 @@ def telemetry_refresh() -> bytes:
     return b"".join(c() for c in TELEMETRY_QUERIES)
 
 
-def session_setup(*, density: int = DENSITY_MEDIUM, batched: bool = False) -> tuple[bytes, ...]:
-    """Connect-time sequence: identify the printer, then set density.
+def session_setup(
+    *, density: int = DENSITY_MEDIUM, batched: bool = False, paper_type: int = PAPER_GAP
+) -> tuple[bytes, ...]:
+    """Connect-time sequence: identify the printer, then set tape type and density.
 
     ``batched=True`` coalesces the queries into a single write, which is what the
     Android app does. The default keeps one write per query -- marginally slower,
     and the conservative choice until batching is confirmed on our own unit.
+
+    ``paper_type`` defaults to the die-cut value because that is what the captured
+    vendor sequence carries. The agent passes the type of the tape actually loaded.
     """
     if density not in DENSITIES:
         raise ValueError(f"density {density} is not one of {DENSITIES}")
+    _check_paper_type(paper_type)
     queries = [c() for c in SESSION_QUERIES]
     packets = [b"".join(queries)] if batched else queries
-    return (*packets, UNKNOWN_0A() + PRINT_DENSITY(density))
+    return (*packets, PAPER_TYPE(paper_type) + PRINT_DENSITY(density))
 
 
 # --------------------------------------------------------------------------- #
@@ -360,27 +385,38 @@ def print_preamble(
     density: int | None = None,
     copies: int = 1,
     head_width_bytes: int = HEAD_WIDTH_BYTES,
+    paper_type: int = PAPER_GAP,
 ) -> bytes:
     """Everything that precedes the raster body, in the vendor's order.
 
-    Both vendor apps agree on density, ``UNKNOWN_0A`` and ``ESC @``; they differ on
-    the rest (Android sends ``LEFT_MARGIN``, iOS sends ``PRINT_MULTI`` and
-    ``EXIT_COMPRESS_MODE``). Both print correctly, so the preamble is tolerant. We
-    send the union, which is a superset of two known-good sequences.
+    Die-cut (``PAPER_GAP``): both vendor apps agree on the paper type, density and
+    ``ESC @``; they differ on the rest (Android sends ``LEFT_MARGIN``, iOS sends
+    ``PRINT_MULTI`` and ``EXIT_COMPRESS_MODE``). Both print correctly, so the preamble
+    is tolerant. We send the union, which is a superset of two known-good sequences.
+
+    Continuous (``PAPER_CONTINUOUS``): the vendor's ``printConstinuous`` sends nothing
+    but ``ESC @`` and the raster, with the paper type and density set beforehand and a
+    feed after the frame (see ``PRINT_AND_FEED``). No margin, no copy count: a copy is
+    another frame, not a printer feature, on this path.
     """
     if copies < 1:
         raise ValueError("copies must be at least 1")
     if copies > 0xFF:
         raise ValueError(f"copies {copies} exceeds the one-byte field")
+    _check_paper_type(paper_type)
+    if paper_type == PAPER_CONTINUOUS and copies > 1:
+        raise ValueError("copies > 1 needs die-cut media; on continuous tape send another frame")
     out = bytearray()
     if density is not None:
         if density not in DENSITIES:
             raise ValueError(f"density {density} is not one of {DENSITIES}")
-        out += UNKNOWN_0A() + PRINT_DENSITY(density)
-    out += LEFT_MARGIN(left_margin_bytes(width_bytes, head_width_bytes))
-    if copies > 1:
-        out += PRINT_MULTI(copies)
+        out += PAPER_TYPE(paper_type) + PRINT_DENSITY(density)
+    if paper_type == PAPER_GAP:
+        out += LEFT_MARGIN(left_margin_bytes(width_bytes, head_width_bytes))
+        if copies > 1:
+            out += PRINT_MULTI(copies)
     out += INIT_PRINTER()
-    out += EXIT_COMPRESS_MODE(0)
+    if paper_type == PAPER_GAP:
+        out += EXIT_COMPRESS_MODE(0)
     out += raster_header(width_bytes, height_px)
     return bytes(out)
