@@ -214,6 +214,15 @@ lines, followed by exactly 2880 bytes. 12 × 240 = 2880 ✅.
 - Density: **1 = light, 2 = medium, 4 = heavy** ✅ (matches `D30Constant.TYPE_CONCENTRATION_*`).
 - `1f110a` — the die-cut tape type; see "Tape type" above. Once per job, adjacent to density.
 
+### Minimum tape position — about 8 mm of dead tape ✅ (measured 2026-10-02)
+
+Printing on a cut piece of tape inserted to the printer's **minimum position** (the least
+tape that still reads as present) leaves about **8 mm** between that position and the
+first printed line, 8.5 mm on a ruler photo. That is mechanical (minimum insertion
+position to print head), not padding: the raster puts only ~1 mm outside each cut tick,
+and the tick-to-tick length matches the raster (41.7-42.5 mm measured against 41.4 mm).
+Software cannot print into those 8 mm; cut at the ticks to drop them.
+
 ### Do not chunk at 255 lines
 
 Confirmed correct. The header carried 240 in a single frame on both transports, and
